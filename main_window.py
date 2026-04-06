@@ -1,11 +1,12 @@
 import os
+import math
 
 from PyQt6.QtWidgets import (
     QMainWindow, QFileDialog,
     QGraphicsScene, QGraphicsPixmapItem,
     QVBoxLayout, QWidget, QTableWidget, QTableWidgetItem, QPushButton,
     QHBoxLayout, QComboBox, QInputDialog, QColorDialog, QMessageBox, QLabel,
-    QHeaderView
+    QHeaderView, QAbstractItemView
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt
@@ -25,6 +26,7 @@ class MainWindow(QMainWindow):
         self.project = create_default_project()
         self.pixmap_item = None
         self.current_class_index = 0
+        self.hovered_path = None
 
         self.scene = QGraphicsScene()
         self.view = GraphicsView(self.scene, self)
@@ -35,6 +37,9 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
         self.class_combo = QComboBox()
         self.class_combo.currentIndexChanged.connect(self.change_active_class)
@@ -138,6 +143,8 @@ class MainWindow(QMainWindow):
         for class_info in self.project.classes:
             class_info.paths = []
 
+        self.hovered_path = None
+
     def display_pixmap(self, pixmap):
         self.scene.clear()
         self.pixmap_item = QGraphicsPixmapItem(pixmap)
@@ -152,8 +159,14 @@ class MainWindow(QMainWindow):
 
     def add_path_to_current_class(self, path_points):
         coords = [(p.x(), p.y()) for p in path_points]
+
+        # Sehr kurze "Klick"-Pfade ignorieren
+        if len(coords) < 2:
+            return
+
         self.project.classes[self.current_class_index].paths.append(coords)
         self.refresh_table()
+        self.view.viewport().update()
 
     def load_image(self):
         file, _ = QFileDialog.getOpenFileName(
@@ -192,6 +205,10 @@ class MainWindow(QMainWindow):
 
     def clear_active_class(self):
         self.project.classes[self.current_class_index].paths = []
+
+        if self.hovered_path is not None and self.hovered_path[0] == self.current_class_index:
+            self.hovered_path = None
+
         self.refresh_table()
         self.view.viewport().update()
 
@@ -229,32 +246,21 @@ class MainWindow(QMainWindow):
             loaded_project = ProjectIO.load(file)
 
             if len(loaded_project.classes) != 8:
-                QMessageBox.warning(
-                    self,
-                    "Warnung",
-                    "Die Datei enthält nicht genau 8 Klassen."
-                )
+                QMessageBox.warning(self, "Warnung", "Die Datei enthält nicht genau 8 Klassen.")
                 return
 
             if not os.path.exists(loaded_project.image_path):
-                QMessageBox.warning(
-                    self,
-                    "Fehler",
-                    f"Bilddatei nicht gefunden:\n{loaded_project.image_path}"
-                )
+                QMessageBox.warning(self, "Fehler", f"Bilddatei nicht gefunden:\n{loaded_project.image_path}")
                 return
 
             pixmap = ImageLoader.load_pixmap(loaded_project.image_path)
             if pixmap.isNull():
-                QMessageBox.warning(
-                    self,
-                    "Fehler",
-                    f"Bild konnte nicht geladen werden:\n{loaded_project.image_path}"
-                )
+                QMessageBox.warning(self, "Fehler", f"Bild konnte nicht geladen werden:\n{loaded_project.image_path}")
                 return
 
             self.project = loaded_project
             self.current_class_index = 0
+            self.hovered_path = None
 
             self.update_class_combo()
             self.update_active_class_label()
@@ -265,3 +271,91 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             QMessageBox.critical(self, "Fehler", f"Laden fehlgeschlagen:\n{e}")
+
+    def set_hovered_path(self, path_id):
+        self.hovered_path = path_id
+        self.view.viewport().update()
+
+    def delete_path_by_id(self, path_id):
+        if path_id is None:
+            return
+
+        class_index, path_index = path_id
+
+        if class_index < 0 or class_index >= len(self.project.classes):
+            self.hovered_path = None
+            return
+
+        paths = self.project.classes[class_index].paths
+
+        if path_index < 0 or path_index >= len(paths):
+            self.hovered_path = None
+            return
+
+        del paths[path_index]
+        self.hovered_path = None
+        self.refresh_table()
+        self.view.viewport().update()
+
+    def distance_point_to_segment(self, p, a, b):
+        px, py = p
+        ax, ay = a
+        bx, by = b
+
+        dx = bx - ax
+        dy = by - ay
+
+        if dx == 0 and dy == 0:
+            return math.hypot(px - ax, py - ay)
+
+        t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+        t = max(0.0, min(1.0, t))
+
+        closest_x = ax + t * dx
+        closest_y = ay + t * dy
+
+        return math.hypot(px - closest_x, py - closest_y)
+
+    def find_nearest_path(self, scene_pos):
+        px = scene_pos.x()
+        py = scene_pos.y()
+
+        # Fangbereich in Bildschirm-Pixeln
+        screen_threshold_px = 60
+
+        current_scale = self.view.transform().m11()
+        if current_scale <= 0:
+            current_scale = 1.0
+
+        threshold_scene = screen_threshold_px / current_scale
+
+        best = None
+        best_dist = float("inf")
+
+        for class_index, class_info in enumerate(self.project.classes):
+            for path_index, path in enumerate(class_info.paths):
+                if len(path) < 2:
+                    continue
+
+                for i in range(len(path) - 1):
+                    dist = self.distance_point_to_segment(
+                        (px, py),
+                        path[i],
+                        path[i + 1]
+                    )
+
+                    if dist < best_dist:
+                        best_dist = dist
+                        best = (class_index, path_index)
+
+        if best_dist <= threshold_scene:
+            return best
+
+        return None
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Control:
+            self.hovered_path = None
+            self.view.viewport().update()
+
+        super().keyReleaseEvent(event)
