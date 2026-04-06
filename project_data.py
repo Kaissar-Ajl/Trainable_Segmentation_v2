@@ -2,10 +2,16 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class AnnotationStroke:
+    points: list = field(default_factory=list)   # [(x, y), ...]
+    brush_size: int = 8
+
+
+@dataclass
 class AnnotationClass:
     name: str
     color: str
-    paths: list = field(default_factory=list)
+    strokes: list[AnnotationStroke] = field(default_factory=list)
 
 
 @dataclass

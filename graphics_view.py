@@ -34,7 +34,6 @@ class GraphicsView(QGraphicsView):
             if not self.main_window.has_image():
                 return
 
-            # Mit Ctrl: kein Zeichnen
             if self.is_ctrl_mode():
                 return
 
@@ -44,14 +43,11 @@ class GraphicsView(QGraphicsView):
             return
 
         elif event.button() == Qt.MouseButton.RightButton:
-            # Nur ohne Ctrl pannen
             if not self.is_ctrl_mode():
                 self._panning = True
                 self._last_pos = event.position()
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 return
-
-            # Mit Ctrl noch nichts tun, Löschen auf mouseRelease
             return
 
         super().mousePressEvent(event)
@@ -76,36 +72,33 @@ class GraphicsView(QGraphicsView):
             self.scene().update()
             return
 
-        # Hover nur im Ctrl-Modus
         if self.is_ctrl_mode():
-            hovered = self.main_window.find_nearest_path(scene_pos)
-            self.main_window.set_hovered_path(hovered)
+            hovered = self.main_window.find_nearest_stroke(scene_pos)
+            self.main_window.set_hovered_stroke(hovered)
         else:
-            self.main_window.set_hovered_path(None)
+            self.main_window.set_hovered_stroke(None)
 
         self.scene().update()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton and self.current_path:
-            self.main_window.add_path_to_current_class(self.current_path)
+            self.main_window.add_stroke_to_current_class(self.current_path)
             self.current_path = []
             self.scene().update()
             return
 
         elif event.button() == Qt.MouseButton.RightButton:
-            # Ctrl + Rechtsklick => direkt an Klickposition löschen
             if self.is_ctrl_mode():
                 scene_pos = self.mapToScene(event.position().toPoint())
-                hit = self.main_window.find_nearest_path(scene_pos)
+                hit = self.main_window.find_nearest_stroke(scene_pos)
 
                 if hit is not None:
-                    self.main_window.delete_path_by_id(hit)
+                    self.main_window.delete_stroke_by_id(hit)
 
                 self.scene().update()
                 return
 
-            # Normales Panning beenden
             if self._panning:
                 self._panning = False
                 self._last_pos = None
@@ -115,43 +108,55 @@ class GraphicsView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def leaveEvent(self, event):
-        self.main_window.set_hovered_path(None)
+        self.main_window.set_hovered_stroke(None)
         self.scene().update()
         super().leaveEvent(event)
 
     def drawForeground(self, painter, rect):
         project = self.main_window.project
-        hovered = self.main_window.hovered_path
+        hovered = self.main_window.hovered_stroke
 
         for class_index, class_info in enumerate(project.classes):
             normal_color = QColor(class_info.color)
 
-            for path_index, path in enumerate(class_info.paths):
-                if len(path) < 2:
+            for stroke_index, stroke in enumerate(class_info.strokes):
+                points = stroke.points
+                if len(points) < 2:
                     continue
 
-                path_id = (class_index, path_index)
+                stroke_id = (class_index, stroke_index)
 
                 pen_color = normal_color
-                pen_width = 2
+                pen_width = max(1, stroke.brush_size)
 
-                if hovered == path_id:
+                if hovered == stroke_id:
                     pen_color = QColor("#ff8800")
-                    pen_width = 6
+                    pen_width = max(pen_width + 2, 6)
 
-                painter.setPen(QPen(pen_color, pen_width))
+                painter.setPen(QPen(
+                    pen_color,
+                    pen_width,
+                    Qt.PenStyle.SolidLine,
+                    Qt.PenCapStyle.RoundCap,
+                    Qt.PenJoinStyle.RoundJoin
+                ))
 
-                for i in range(len(path) - 1):
-                    p1 = QPointF(path[i][0], path[i][1])
-                    p2 = QPointF(path[i + 1][0], path[i + 1][1])
+                for i in range(len(points) - 1):
+                    p1 = QPointF(points[i][0], points[i][1])
+                    p2 = QPointF(points[i + 1][0], points[i + 1][1])
                     painter.drawLine(p1, p2)
 
-        # Aktuell gezeichneter Pfad
         if len(self.current_path) > 1:
             active_color = QColor(
                 project.classes[self.main_window.current_class_index].color
             )
-            painter.setPen(QPen(active_color, 2))
+            painter.setPen(QPen(
+                active_color,
+                max(1, self.main_window.brush_size),
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin
+            ))
 
             for i in range(len(self.current_path) - 1):
                 painter.drawLine(self.current_path[i], self.current_path[i + 1])

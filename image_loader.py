@@ -1,3 +1,4 @@
+import numpy as np
 from PyQt6.QtGui import QPixmap, QImage
 from PIL import Image
 
@@ -27,3 +28,9 @@ class ImageLoader:
                 return ImageLoader.pil_to_qpixmap(img)
         except Exception:
             return QPixmap()
+
+    @staticmethod
+    def load_numpy_gray(file_path: str):
+        with Image.open(file_path) as img:
+            gray = img.convert("L")
+            return np.array(gray, dtype=np.uint8)

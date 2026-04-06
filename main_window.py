@@ -1,17 +1,19 @@
 import os
 import math
+import numpy as np
+from PIL import Image, ImageDraw
 
 from PyQt6.QtWidgets import (
     QMainWindow, QFileDialog,
     QGraphicsScene, QGraphicsPixmapItem,
     QVBoxLayout, QWidget, QTableWidget, QTableWidgetItem, QPushButton,
     QHBoxLayout, QComboBox, QInputDialog, QColorDialog, QMessageBox, QLabel,
-    QHeaderView, QAbstractItemView
+    QHeaderView, QAbstractItemView, QSpinBox
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt
 
-from project_data import create_default_project
+from project_data import create_default_project, AnnotationStroke
 from image_loader import ImageLoader
 from project_io import ProjectIO
 from graphics_view import GraphicsView
@@ -21,22 +23,27 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Mehrklassen-Markierung")
-        self.resize(1300, 850)
+        self.resize(1400, 900)
 
         self.project = create_default_project()
         self.pixmap_item = None
         self.current_class_index = 0
-        self.hovered_path = None
+        self.hovered_stroke = None
+
+        self.image_array = None
+        self.label_mask = None
+        self.brush_size = 8
 
         self.scene = QGraphicsScene()
         self.view = GraphicsView(self.scene, self)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Class", "Points", "Coordinates"])
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Class", "Points", "Brush", "Pixels"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -45,6 +52,11 @@ class MainWindow(QMainWindow):
         self.class_combo.currentIndexChanged.connect(self.change_active_class)
 
         self.active_class_label = QLabel()
+
+        self.brush_spin = QSpinBox()
+        self.brush_spin.setRange(1, 100)
+        self.brush_spin.setValue(self.brush_size)
+        self.brush_spin.valueChanged.connect(self.change_brush_size)
 
         rename_button = QPushButton("Klasse umbenennen")
         rename_button.clicked.connect(self.rename_class)
@@ -64,16 +76,23 @@ class MainWindow(QMainWindow):
         clear_class_button = QPushButton("Aktive Klasse löschen")
         clear_class_button.clicked.connect(self.clear_active_class)
 
+        rebuild_mask_button = QPushButton("Maske neu aufbauen")
+        rebuild_mask_button.clicked.connect(self.rebuild_label_mask_from_strokes)
+
         top_layout = QHBoxLayout()
         top_layout.addWidget(QLabel("Aktive Klasse:"))
         top_layout.addWidget(self.class_combo)
         top_layout.addWidget(self.active_class_label)
+        top_layout.addSpacing(10)
+        top_layout.addWidget(QLabel("Brush:"))
+        top_layout.addWidget(self.brush_spin)
         top_layout.addWidget(rename_button)
         top_layout.addWidget(color_button)
         top_layout.addWidget(load_image_button)
         top_layout.addWidget(save_button)
         top_layout.addWidget(load_project_button)
         top_layout.addWidget(clear_class_button)
+        top_layout.addWidget(rebuild_mask_button)
 
         layout = QVBoxLayout()
         layout.addLayout(top_layout)
@@ -89,7 +108,7 @@ class MainWindow(QMainWindow):
         self.refresh_table()
 
     def has_image(self):
-        return self.pixmap_item is not None
+        return self.pixmap_item is not None and self.image_array is not None
 
     def update_class_combo(self):
         self.class_combo.blockSignals(True)
@@ -112,6 +131,10 @@ class MainWindow(QMainWindow):
     def change_active_class(self, index):
         self.current_class_index = index
         self.update_active_class_label()
+        self.view.viewport().update()
+
+    def change_brush_size(self, value):
+        self.brush_size = int(value)
         self.view.viewport().update()
 
     def rename_class(self):
@@ -139,11 +162,20 @@ class MainWindow(QMainWindow):
             self.update_active_class_label()
             self.view.viewport().update()
 
-    def clear_all_paths(self):
+    def clear_all_strokes(self):
         for class_info in self.project.classes:
-            class_info.paths = []
+            class_info.strokes = []
 
-        self.hovered_path = None
+        self.hovered_stroke = None
+        self.reset_label_mask()
+
+    def reset_label_mask(self):
+        if self.image_array is None:
+            self.label_mask = None
+            return
+
+        h, w = self.image_array.shape[:2]
+        self.label_mask = np.full((h, w), -1, dtype=np.int32)
 
     def display_pixmap(self, pixmap):
         self.scene.clear()
@@ -157,14 +189,19 @@ class MainWindow(QMainWindow):
         self.scene.update()
         self.view.viewport().update()
 
-    def add_path_to_current_class(self, path_points):
-        coords = [(p.x(), p.y()) for p in path_points]
+    def add_stroke_to_current_class(self, path_points):
+        coords = [(float(p.x()), float(p.y())) for p in path_points]
 
-        # Sehr kurze "Klick"-Pfade ignorieren
         if len(coords) < 2:
             return
 
-        self.project.classes[self.current_class_index].paths.append(coords)
+        stroke = AnnotationStroke(
+            points=coords,
+            brush_size=self.brush_size
+        )
+        self.project.classes[self.current_class_index].strokes.append(stroke)
+
+        self.paint_stroke_into_label_mask(stroke, self.current_class_index)
         self.refresh_table()
         self.view.viewport().update()
 
@@ -183,8 +220,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Fehler", f"Bild konnte nicht geladen werden:\n{file}")
             return
 
+        try:
+            image_array = ImageLoader.load_numpy_gray(file)
+        except Exception as e:
+            QMessageBox.warning(self, "Fehler", f"Bild konnte nicht als NumPy-Array geladen werden:\n{e}")
+            return
+
         self.project.image_path = file
-        self.clear_all_paths()
+        self.image_array = image_array
+        self.clear_all_strokes()
         self.refresh_table()
         self.display_pixmap(pixmap)
 
@@ -192,23 +236,44 @@ class MainWindow(QMainWindow):
         self.table.setRowCount(0)
 
         for class_info in self.project.classes:
-            for path in class_info.paths:
+            for stroke in class_info.strokes:
                 row = self.table.rowCount()
                 self.table.insertRow(row)
 
-                points_count = len(path)
-                coords = [(int(p[0]), int(p[1])) for p in path]
+                points_count = len(stroke.points)
+                brush = stroke.brush_size
+                pixel_count = self.estimate_stroke_pixels(stroke)
 
                 self.table.setItem(row, 0, QTableWidgetItem(class_info.name))
                 self.table.setItem(row, 1, QTableWidgetItem(str(points_count)))
-                self.table.setItem(row, 2, QTableWidgetItem(str(coords)))
+                self.table.setItem(row, 2, QTableWidgetItem(str(brush)))
+                self.table.setItem(row, 3, QTableWidgetItem(str(pixel_count)))
+
+    def estimate_stroke_pixels(self, stroke):
+        if self.image_array is None:
+            return 0
+
+        temp = Image.new("L", (self.image_array.shape[1], self.image_array.shape[0]), 0)
+        draw = ImageDraw.Draw(temp)
+
+        pts = [(int(round(x)), int(round(y))) for x, y in stroke.points]
+        if len(pts) == 1:
+            r = max(1, stroke.brush_size // 2)
+            x, y = pts[0]
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=255)
+        else:
+            draw.line(pts, fill=255, width=stroke.brush_size)
+
+        arr = np.array(temp, dtype=np.uint8)
+        return int(np.count_nonzero(arr))
 
     def clear_active_class(self):
-        self.project.classes[self.current_class_index].paths = []
+        self.project.classes[self.current_class_index].strokes = []
 
-        if self.hovered_path is not None and self.hovered_path[0] == self.current_class_index:
-            self.hovered_path = None
+        if self.hovered_stroke is not None and self.hovered_stroke[0] == self.current_class_index:
+            self.hovered_stroke = None
 
+        self.rebuild_label_mask_from_strokes()
         self.refresh_table()
         self.view.viewport().update()
 
@@ -258,42 +323,47 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Fehler", f"Bild konnte nicht geladen werden:\n{loaded_project.image_path}")
                 return
 
+            image_array = ImageLoader.load_numpy_gray(loaded_project.image_path)
+
             self.project = loaded_project
+            self.image_array = image_array
             self.current_class_index = 0
-            self.hovered_path = None
+            self.hovered_stroke = None
 
             self.update_class_combo()
             self.update_active_class_label()
-            self.refresh_table()
             self.display_pixmap(pixmap)
+            self.rebuild_label_mask_from_strokes()
+            self.refresh_table()
 
             QMessageBox.information(self, "Geladen", "Projekt wurde geladen.")
 
         except Exception as e:
             QMessageBox.critical(self, "Fehler", f"Laden fehlgeschlagen:\n{e}")
 
-    def set_hovered_path(self, path_id):
-        self.hovered_path = path_id
+    def set_hovered_stroke(self, stroke_id):
+        self.hovered_stroke = stroke_id
         self.view.viewport().update()
 
-    def delete_path_by_id(self, path_id):
-        if path_id is None:
+    def delete_stroke_by_id(self, stroke_id):
+        if stroke_id is None:
             return
 
-        class_index, path_index = path_id
+        class_index, stroke_index = stroke_id
 
         if class_index < 0 or class_index >= len(self.project.classes):
-            self.hovered_path = None
+            self.hovered_stroke = None
             return
 
-        paths = self.project.classes[class_index].paths
+        strokes = self.project.classes[class_index].strokes
 
-        if path_index < 0 or path_index >= len(paths):
-            self.hovered_path = None
+        if stroke_index < 0 or stroke_index >= len(strokes):
+            self.hovered_stroke = None
             return
 
-        del paths[path_index]
-        self.hovered_path = None
+        del strokes[stroke_index]
+        self.hovered_stroke = None
+        self.rebuild_label_mask_from_strokes()
         self.refresh_table()
         self.view.viewport().update()
 
@@ -316,11 +386,10 @@ class MainWindow(QMainWindow):
 
         return math.hypot(px - closest_x, py - closest_y)
 
-    def find_nearest_path(self, scene_pos):
+    def find_nearest_stroke(self, scene_pos):
         px = scene_pos.x()
         py = scene_pos.y()
 
-        # Fangbereich in Bildschirm-Pixeln
         screen_threshold_px = 60
 
         current_scale = self.view.transform().m11()
@@ -333,29 +402,62 @@ class MainWindow(QMainWindow):
         best_dist = float("inf")
 
         for class_index, class_info in enumerate(self.project.classes):
-            for path_index, path in enumerate(class_info.paths):
-                if len(path) < 2:
+            for stroke_index, stroke in enumerate(class_info.strokes):
+                points = stroke.points
+                if len(points) < 2:
                     continue
 
-                for i in range(len(path) - 1):
+                for i in range(len(points) - 1):
                     dist = self.distance_point_to_segment(
                         (px, py),
-                        path[i],
-                        path[i + 1]
+                        points[i],
+                        points[i + 1]
                     )
+
+                    dist = max(0.0, dist - stroke.brush_size / 2)
 
                     if dist < best_dist:
                         best_dist = dist
-                        best = (class_index, path_index)
+                        best = (class_index, stroke_index)
 
         if best_dist <= threshold_scene:
             return best
 
         return None
 
+    def paint_stroke_into_label_mask(self, stroke, class_index):
+        if self.label_mask is None:
+            return
+
+        h, w = self.label_mask.shape
+        temp = Image.new("L", (w, h), 0)
+        draw = ImageDraw.Draw(temp)
+
+        pts = [(int(round(x)), int(round(y))) for x, y in stroke.points]
+
+        if len(pts) == 1:
+            r = max(1, stroke.brush_size // 2)
+            x, y = pts[0]
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=255)
+        else:
+            draw.line(pts, fill=255, width=stroke.brush_size)
+
+        mask = np.array(temp, dtype=np.uint8) > 0
+        self.label_mask[mask] = class_index
+
+    def rebuild_label_mask_from_strokes(self):
+        self.reset_label_mask()
+
+        if self.label_mask is None:
+            return
+
+        for class_index, class_info in enumerate(self.project.classes):
+            for stroke in class_info.strokes:
+                self.paint_stroke_into_label_mask(stroke, class_index)
+
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key.Key_Control:
-            self.hovered_path = None
+            self.hovered_stroke = None
             self.view.viewport().update()
 
         super().keyReleaseEvent(event)

@@ -1,6 +1,17 @@
-Liebe Nutzer und Nutzerinen 
+Python installieren (3.10+)
+Terminal im Projektordner öffnen
+Pakete installieren:
+pip install -r requirements.txt
+Programm starten:
+python main.py
 
-um unsere Program zu benutzen und uns während der Entwicklungsphase zu beobachten brauchen Sie folgende Extentions/Biblotheken/Umgegung zu installieren 
 
-Gerne unterstüzte ich Sie jeder Zeit dabei.
 
+
+
+main.py            → Start
+main_window.py     → UI + Logik
+graphics_view.py   → Zeichnen + Maus
+project_data.py    → Datenstruktur
+project_io.py      → Speichern/Laden
+image_loader.py    → Bilder laden (inkl. TIFF)
