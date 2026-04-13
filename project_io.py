@@ -1,7 +1,7 @@
 import json
 import os
 
-from project_data import ProjectData, AnnotationClass
+from project_data import ProjectData, AnnotationClass, AnnotationStroke
 
 
 class ProjectIO:
@@ -11,13 +11,19 @@ class ProjectIO:
         relative_image_path = os.path.relpath(project.image_path, project_dir)
 
         data = {
-            "version": 1,
+            "version": 2,
             "image_path": relative_image_path,
             "classes": [
                 {
                     "name": c.name,
                     "color": c.color,
-                    "paths": c.paths,
+                    "strokes": [
+                        {
+                            "points": stroke.points,
+                            "brush_size": stroke.brush_size,
+                        }
+                        for stroke in c.strokes
+                    ],
                 }
                 for c in project.classes
             ]
@@ -38,14 +44,40 @@ class ProjectIO:
         )
 
         classes_raw = data.get("classes", [])
-        classes = [
-            AnnotationClass(
-                name=item.get("name", "Unnamed"),
-                color=item.get("color", "#ff0000"),
-                paths=item.get("paths", [])
+        classes = []
+
+        for item in classes_raw:
+            name = item.get("name", "Unnamed")
+            color = item.get("color", "#ff0000")
+
+            strokes = []
+
+            # Neues Format
+            for stroke_raw in item.get("strokes", []):
+                strokes.append(
+                    AnnotationStroke(
+                        points=stroke_raw.get("points", []),
+                        brush_size=int(stroke_raw.get("brush_size", 8))
+                    )
+                )
+
+            # Altes Format kompatibel halten
+            if not strokes:
+                for old_path in item.get("paths", []):
+                    strokes.append(
+                        AnnotationStroke(
+                            points=old_path,
+                            brush_size=8
+                        )
+                    )
+
+            classes.append(
+                AnnotationClass(
+                    name=name,
+                    color=color,
+                    strokes=strokes
+                )
             )
-            for item in classes_raw
-        ]
 
         return ProjectData(
             image_path=resolved_image_path,
