@@ -61,7 +61,7 @@ class ProjectIO:
                     )
                 )
 
-            # Altes Format kompatibel halten: "paths"
+            # Altes Format kompatibel halten
             if not strokes:
                 for old_path in item.get("paths", []):
                     strokes.append(

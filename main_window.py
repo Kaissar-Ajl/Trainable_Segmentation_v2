@@ -10,19 +10,21 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QComboBox, QInputDialog, QColorDialog, QMessageBox, QLabel,
     QHeaderView, QAbstractItemView, QSpinBox
 )
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QPixmap, QImage
 from PyQt6.QtCore import Qt
 
 from project_data import create_default_project, AnnotationStroke
 from image_loader import ImageLoader
 from project_io import ProjectIO
 from graphics_view import GraphicsView
+from feature_extractor import FeatureExtractor
+from training_engine import TrainingEngine
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mehrklassen-Markierung")
+        self.setWindowTitle("Mehrklassen-Markierung + Segmentierung")
         self.resize(1400, 900)
 
         self.project = create_default_project()
@@ -32,7 +34,17 @@ class MainWindow(QMainWindow):
 
         self.image_array = None
         self.label_mask = None
+        self.feature_stack = None
+        self.feature_names = []
+        self.classifier = None
+        self.prediction_mask = None
+        self.probability_map = None
+
         self.brush_size = 8
+
+        self.overlay_item = None
+        self.overlay_visible = True
+        self.overlay_opacity = 0.5
 
         self.scene = QGraphicsScene()
         self.view = GraphicsView(self.scene, self)
@@ -79,6 +91,21 @@ class MainWindow(QMainWindow):
         rebuild_mask_button = QPushButton("Maske neu aufbauen")
         rebuild_mask_button.clicked.connect(self.rebuild_label_mask_from_strokes)
 
+        extract_features_button = QPushButton("Features berechnen")
+        extract_features_button.clicked.connect(self.extract_features)
+
+        train_button = QPushButton("Trainieren")
+        train_button.clicked.connect(self.train_model)
+
+        predict_button = QPushButton("Segmentieren")
+        predict_button.clicked.connect(self.predict_segmentation)
+
+        toggle_overlay_button = QPushButton("Overlay AN/AUS")
+        toggle_overlay_button.clicked.connect(self.toggle_overlay)
+
+        opacity_button = QPushButton("Transparenz ändern")
+        opacity_button.clicked.connect(self.change_overlay_opacity)
+
         top_layout = QHBoxLayout()
         top_layout.addWidget(QLabel("Aktive Klasse:"))
         top_layout.addWidget(self.class_combo)
@@ -93,6 +120,11 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(load_project_button)
         top_layout.addWidget(clear_class_button)
         top_layout.addWidget(rebuild_mask_button)
+        top_layout.addWidget(extract_features_button)
+        top_layout.addWidget(train_button)
+        top_layout.addWidget(predict_button)
+        top_layout.addWidget(toggle_overlay_button)
+        top_layout.addWidget(opacity_button)
 
         layout = QVBoxLayout()
         layout.addLayout(top_layout)
@@ -129,9 +161,10 @@ class MainWindow(QMainWindow):
         )
 
     def change_active_class(self, index):
-        self.current_class_index = index
-        self.update_active_class_label()
-        self.view.viewport().update()
+        if 0 <= index < len(self.project.classes):
+            self.current_class_index = index
+            self.update_active_class_label()
+            self.view.viewport().update()
 
     def change_brush_size(self, value):
         self.brush_size = int(value)
@@ -161,6 +194,8 @@ class MainWindow(QMainWindow):
             self.project.classes[self.current_class_index].color = color.name()
             self.update_active_class_label()
             self.view.viewport().update()
+            if self.prediction_mask is not None:
+                self.show_overlay()
 
     def clear_all_strokes(self):
         for class_info in self.project.classes:
@@ -176,6 +211,20 @@ class MainWindow(QMainWindow):
 
         h, w = self.image_array.shape[:2]
         self.label_mask = np.full((h, w), -1, dtype=np.int32)
+
+    def reset_ml_state(self):
+        self.feature_stack = None
+        self.feature_names = []
+        self.classifier = None
+        self.prediction_mask = None
+        self.probability_map = None
+        self.clear_overlay()
+
+    def reset_prediction_only(self):
+        self.classifier = None
+        self.prediction_mask = None
+        self.probability_map = None
+        self.clear_overlay()
 
     def display_pixmap(self, pixmap):
         self.scene.clear()
@@ -202,6 +251,7 @@ class MainWindow(QMainWindow):
         self.project.classes[self.current_class_index].strokes.append(stroke)
 
         self.paint_stroke_into_label_mask(stroke, self.current_class_index)
+        self.reset_prediction_only()
         self.refresh_table()
         self.view.viewport().update()
 
@@ -229,6 +279,7 @@ class MainWindow(QMainWindow):
         self.project.image_path = file
         self.image_array = image_array
         self.clear_all_strokes()
+        self.reset_ml_state()
         self.refresh_table()
         self.display_pixmap(pixmap)
 
@@ -274,6 +325,7 @@ class MainWindow(QMainWindow):
             self.hovered_stroke = None
 
         self.rebuild_label_mask_from_strokes()
+        self.reset_prediction_only()
         self.refresh_table()
         self.view.viewport().update()
 
@@ -329,6 +381,7 @@ class MainWindow(QMainWindow):
             self.image_array = image_array
             self.current_class_index = 0
             self.hovered_stroke = None
+            self.reset_ml_state()
 
             self.update_class_combo()
             self.update_active_class_label()
@@ -364,6 +417,7 @@ class MainWindow(QMainWindow):
         del strokes[stroke_index]
         self.hovered_stroke = None
         self.rebuild_label_mask_from_strokes()
+        self.reset_prediction_only()
         self.refresh_table()
         self.view.viewport().update()
 
@@ -449,11 +503,204 @@ class MainWindow(QMainWindow):
         self.reset_label_mask()
 
         if self.label_mask is None:
+            QMessageBox.warning(self, "Fehler", "Keine Bilddaten vorhanden.")
             return
+
+        stroke_count = 0
 
         for class_index, class_info in enumerate(self.project.classes):
             for stroke in class_info.strokes:
                 self.paint_stroke_into_label_mask(stroke, class_index)
+                stroke_count += 1
+
+        QMessageBox.information(
+            self,
+            "Maske neu aufgebaut",
+            f"Fertig!\n\n"
+            f"{stroke_count} Strokes verarbeitet.\n"
+            f"Maske wurde erfolgreich aktualisiert."
+        )
+
+    def extract_features(self):
+        if self.image_array is None:
+            QMessageBox.warning(self, "Fehler", "Bitte zuerst ein Bild laden.")
+            return
+
+        try:
+            self.feature_stack, self.feature_names = FeatureExtractor.extract_features(self.image_array)
+
+            QMessageBox.information(
+                self,
+                "Features berechnet",
+                f"{len(self.feature_names)} Features wurden berechnet:\n\n" +
+                "\n".join(self.feature_names)
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", f"Feature-Berechnung fehlgeschlagen:\n{e}")
+
+    def train_model(self):
+        if self.image_array is None:
+            QMessageBox.warning(self, "Fehler", "Bitte zuerst ein Bild laden.")
+            return
+
+        if self.label_mask is None:
+            QMessageBox.warning(self, "Fehler", "Keine Label-Maske vorhanden.")
+            return
+
+        if self.feature_stack is None:
+            QMessageBox.information(self, "Hinweis", "Features werden zuerst berechnet.")
+            self.extract_features()
+
+            if self.feature_stack is None:
+                return
+
+        try:
+            X, y = TrainingEngine.build_training_set(self.feature_stack, self.label_mask)
+            self.classifier = TrainingEngine.train_random_forest(X, y)
+
+            class_counts = {}
+            for class_id in np.unique(y):
+                class_counts[int(class_id)] = int(np.sum(y == class_id))
+
+            info = "\n".join(
+                f"{self.project.classes[class_id].name}: {count} Pixel"
+                for class_id, count in class_counts.items()
+            )
+
+            QMessageBox.information(
+                self,
+                "Training erfolgreich",
+                f"Modell wurde trainiert.\n\nTrainingspixel pro Klasse:\n{info}"
+            )
+
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", f"Training fehlgeschlagen:\n{e}")
+
+    def predict_segmentation(self):
+        if self.image_array is None:
+            QMessageBox.warning(self, "Fehler", "Bitte zuerst ein Bild laden.")
+            return
+
+        if self.classifier is None:
+            QMessageBox.warning(self, "Fehler", "Bitte zuerst trainieren.")
+            return
+
+        if self.feature_stack is None:
+            QMessageBox.warning(self, "Fehler", "Bitte zuerst Features berechnen.")
+            return
+
+        try:
+            self.prediction_mask = TrainingEngine.predict_full_image(
+                self.feature_stack,
+                self.classifier
+            )
+
+            self.overlay_visible = True
+            self.show_overlay()
+
+            QMessageBox.information(
+                self,
+                "Segmentierung fertig",
+                f"Vorhersage berechnet: {self.prediction_mask.shape[1]} x {self.prediction_mask.shape[0]}"
+            )
+
+            self.show_prediction_summary()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", f"Segmentierung fehlgeschlagen:\n{e}")
+
+    def show_prediction_summary(self):
+        if self.prediction_mask is None:
+            return
+
+        unique_classes, counts = np.unique(self.prediction_mask, return_counts=True)
+
+        lines = []
+        for class_id, count in zip(unique_classes, counts):
+            if 0 <= int(class_id) < len(self.project.classes):
+                class_name = self.project.classes[int(class_id)].name
+            else:
+                class_name = f"Class {class_id}"
+
+            lines.append(f"{class_name}: {int(count)} Pixel")
+
+        QMessageBox.information(
+            self,
+            "Vorhersage-Zusammenfassung",
+            "\n".join(lines)
+        )
+
+    def create_overlay_pixmap(self):
+        if self.prediction_mask is None:
+            return None
+
+        h, w = self.prediction_mask.shape
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+
+        for class_index, class_info in enumerate(self.project.classes):
+            color = QColor(class_info.color)
+            r, g, b = color.red(), color.green(), color.blue()
+
+            mask = self.prediction_mask == class_index
+            rgba[mask, 0] = r
+            rgba[mask, 1] = g
+            rgba[mask, 2] = b
+            rgba[mask, 3] = int(255 * self.overlay_opacity)
+
+        qimage = QImage(
+            rgba.data,
+            w,
+            h,
+            4 * w,
+            QImage.Format.Format_RGBA8888
+        )
+
+        return QPixmap.fromImage(qimage.copy())
+
+    def show_overlay(self):
+        if self.prediction_mask is None:
+            return
+
+        pixmap = self.create_overlay_pixmap()
+        if pixmap is None:
+            return
+
+        if self.overlay_item is not None:
+            self.scene.removeItem(self.overlay_item)
+            self.overlay_item = None
+
+        self.overlay_item = QGraphicsPixmapItem(pixmap)
+        self.overlay_item.setZValue(10)
+        self.overlay_item.setVisible(self.overlay_visible)
+        self.scene.addItem(self.overlay_item)
+
+    def clear_overlay(self):
+        if self.overlay_item is not None:
+            self.scene.removeItem(self.overlay_item)
+            self.overlay_item = None
+
+    def toggle_overlay(self):
+        if self.overlay_item is None:
+            return
+
+        self.overlay_visible = not self.overlay_visible
+        self.overlay_item.setVisible(self.overlay_visible)
+
+    def change_overlay_opacity(self):
+        value, ok = QInputDialog.getDouble(
+            self,
+            "Transparenz",
+            "Wert (0.0 - 1.0):",
+            value=self.overlay_opacity,
+            min=0.0,
+            max=1.0,
+            decimals=2
+        )
+
+        if ok:
+            self.overlay_opacity = float(value)
+            if self.prediction_mask is not None:
+                self.show_overlay()
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key.Key_Control:
