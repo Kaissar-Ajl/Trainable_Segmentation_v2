@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QComboBox, QInputDialog, QColorDialog, QMessageBox, QLabel,
     QHeaderView, QAbstractItemView, QSpinBox
 )
-from PyQt6.QtGui import QColor, QPixmap, QImage
+from PyQt6.QtGui import QColor, QPixmap, QImage, QPainter
 from PyQt6.QtCore import Qt
 
 from project_data import create_default_project, AnnotationStroke
@@ -106,6 +106,9 @@ class MainWindow(QMainWindow):
         opacity_button = QPushButton("Transparenz ändern")
         opacity_button.clicked.connect(self.change_overlay_opacity)
 
+        download_segmented_button = QPushButton("Segmentiertes Bild speichern")
+        download_segmented_button.clicked.connect(self.save_segmented_image)
+
         top_layout = QHBoxLayout()
         top_layout.addWidget(QLabel("Aktive Klasse:"))
         top_layout.addWidget(self.class_combo)
@@ -125,6 +128,7 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(predict_button)
         top_layout.addWidget(toggle_overlay_button)
         top_layout.addWidget(opacity_button)
+        top_layout.addWidget(download_segmented_button)
 
         layout = QVBoxLayout()
         layout.addLayout(top_layout)
@@ -701,6 +705,59 @@ class MainWindow(QMainWindow):
             self.overlay_opacity = float(value)
             if self.prediction_mask is not None:
                 self.show_overlay()
+
+    def save_segmented_image(self):
+        if self.pixmap_item is None:
+            QMessageBox.warning(self, "Fehler", "Kein Bild geladen.")
+            return
+
+        if self.prediction_mask is None:
+            QMessageBox.warning(self, "Fehler", "Bitte zuerst segmentieren.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Segmentiertes Bild speichern",
+            "",
+            "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg);;BMP Files (*.bmp)"
+        )
+        if not file_path:
+            return
+
+        try:
+            base_pixmap = self.pixmap_item.pixmap()
+
+            if base_pixmap.isNull():
+                QMessageBox.warning(self, "Fehler", "Originalbild konnte nicht gelesen werden.")
+                return
+
+            result = QPixmap(base_pixmap.size())
+            result.fill(Qt.GlobalColor.transparent)
+
+            painter = QPainter(result)
+            painter.drawPixmap(0, 0, base_pixmap)
+
+            overlay = self.create_overlay_pixmap()
+            if overlay is not None:
+                painter.drawPixmap(0, 0, overlay)
+
+            painter.end()
+
+            if not result.save(file_path):
+                raise RuntimeError("Die Datei konnte nicht gespeichert werden.")
+
+            QMessageBox.information(
+                self,
+                "Gespeichert",
+                f"Segmentiertes Bild wurde gespeichert:\n{file_path}"
+            )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Fehler",
+                f"Speichern des segmentierten Bildes fehlgeschlagen:\n{e}"
+            )
 
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key.Key_Control:
