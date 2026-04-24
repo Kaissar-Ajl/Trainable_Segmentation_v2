@@ -3,8 +3,9 @@ from dataclasses import dataclass, field
 
 @dataclass
 class AnnotationStroke:
-    points: list = field(default_factory=list)   # [(x, y), ...]
+    points: list = field(default_factory=list)
     brush_size: int = 8
+    stroke_type: str = "Stroke"
 
 
 @dataclass

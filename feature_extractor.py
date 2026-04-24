@@ -26,8 +26,10 @@ class FeatureExtractor:
         # Raw intensity
         features.append(image)
         names.append("intensity")
+        
+        # Gaussian blur - Glättung in verschiedenen Größen.
+        # Hilft, Strukturen auf mehreren Skalen zu erkennen.
 
-        # Gaussian blur
         g1 = gaussian(image, sigma=1, preserve_range=True)
         g2 = gaussian(image, sigma=2, preserve_range=True)
         g4 = gaussian(image, sigma=4, preserve_range=True)
@@ -39,17 +41,17 @@ class FeatureExtractor:
             "gaussian_sigma_4"
         ])
 
-        # Sobel edge
+        # Sobel edge Erkennt Kanten und Richtungsänderungen.
         s = sobel(image)
         features.append(s)
         names.append("sobel")
 
-        # Laplace
+        # Laplace Betont Übergänge.
         l = laplace(image, ksize=3)
         features.append(l)
         names.append("laplace")
 
-        # Difference of Gaussians
+        # Difference of Gaussians 
         dog_1_2 = g1 - g2
         dog_2_4 = g2 - g4
         features.extend([dog_1_2, dog_2_4])

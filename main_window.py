@@ -50,12 +50,13 @@ class MainWindow(QMainWindow):
         self.view = GraphicsView(self.scene, self)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Class", "Points", "Brush", "Pixels"])
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["Class", "Type", "Points", "Brush", "Pixels"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -70,24 +71,7 @@ class MainWindow(QMainWindow):
         self.brush_spin.setValue(self.brush_size)
         self.brush_spin.valueChanged.connect(self.change_brush_size)
 
-        rename_button = QPushButton("Klasse umbenennen")
-        rename_button.clicked.connect(self.rename_class)
-
-        color_button = QPushButton("Farbe ändern")
-        color_button.clicked.connect(self.change_class_color)
-
-        load_image_button = QPushButton("Bild laden")
-        load_image_button.clicked.connect(self.load_image)
-
-        save_button = QPushButton("Projekt speichern")
-        save_button.clicked.connect(self.save_project)
-
-        load_project_button = QPushButton("Projekt laden")
-        load_project_button.clicked.connect(self.load_project)
-
-        clear_class_button = QPushButton("Aktive Klasse löschen")
-        clear_class_button.clicked.connect(self.clear_active_class)
-
+        # Sichtbare Segmentierungs-Buttons
         rebuild_mask_button = QPushButton("Maske neu aufbauen")
         rebuild_mask_button.clicked.connect(self.rebuild_label_mask_from_strokes)
 
@@ -106,29 +90,23 @@ class MainWindow(QMainWindow):
         opacity_button = QPushButton("Transparenz ändern")
         opacity_button.clicked.connect(self.change_overlay_opacity)
 
-        download_segmented_button = QPushButton("Segmentiertes Bild speichern")
-        download_segmented_button.clicked.connect(self.save_segmented_image)
+        self.create_menus()
 
         top_layout = QHBoxLayout()
         top_layout.addWidget(QLabel("Aktive Klasse:"))
         top_layout.addWidget(self.class_combo)
         top_layout.addWidget(self.active_class_label)
-        top_layout.addSpacing(10)
+        top_layout.addSpacing(20)
         top_layout.addWidget(QLabel("Brush:"))
         top_layout.addWidget(self.brush_spin)
-        top_layout.addWidget(rename_button)
-        top_layout.addWidget(color_button)
-        top_layout.addWidget(load_image_button)
-        top_layout.addWidget(save_button)
-        top_layout.addWidget(load_project_button)
-        top_layout.addWidget(clear_class_button)
+        top_layout.addSpacing(20)
         top_layout.addWidget(rebuild_mask_button)
         top_layout.addWidget(extract_features_button)
         top_layout.addWidget(train_button)
         top_layout.addWidget(predict_button)
         top_layout.addWidget(toggle_overlay_button)
         top_layout.addWidget(opacity_button)
-        top_layout.addWidget(download_segmented_button)
+        top_layout.addStretch()
 
         layout = QVBoxLayout()
         layout.addLayout(top_layout)
@@ -143,6 +121,44 @@ class MainWindow(QMainWindow):
         self.update_active_class_label()
         self.refresh_table()
 
+    # =====================================================
+    # MENÜ
+    # =====================================================
+    def create_menus(self):
+        menu_bar = self.menuBar()
+
+        # Datei
+        file_menu = menu_bar.addMenu("Datei")
+
+        action_load_image = file_menu.addAction("Bild laden")
+        action_load_image.triggered.connect(self.load_image)
+
+        action_save_project = file_menu.addAction("Projekt speichern")
+        action_save_project.triggered.connect(self.save_project)
+
+        action_load_project = file_menu.addAction("Projekt laden")
+        action_load_project.triggered.connect(self.load_project)
+
+        file_menu.addSeparator()
+
+        action_save_segmented = file_menu.addAction("Segmentiertes Bild speichern")
+        action_save_segmented.triggered.connect(self.save_segmented_image)
+
+        # Klassen
+        class_menu = menu_bar.addMenu("Klassen")
+
+        action_rename = class_menu.addAction("Klasse umbenennen")
+        action_rename.triggered.connect(self.rename_class)
+
+        action_color = class_menu.addAction("Farbe ändern")
+        action_color.triggered.connect(self.change_class_color)
+
+        action_delete = class_menu.addAction("Aktive Klasse löschen")
+        action_delete.triggered.connect(self.clear_active_class)
+
+    # =====================================================
+    # BASIS
+    # =====================================================
     def has_image(self):
         return self.pixmap_item is not None and self.image_array is not None
 
@@ -159,9 +175,10 @@ class MainWindow(QMainWindow):
     def update_active_class_label(self):
         color = self.project.classes[self.current_class_index].color
         name = self.project.classes[self.current_class_index].name
+
         self.active_class_label.setText(f"{name} ({color})")
         self.active_class_label.setStyleSheet(
-            f"padding: 4px; border: 1px solid black; background-color: {color};"
+            f"padding:4px; border:1px solid black; background-color:{color};"
         )
 
     def change_active_class(self, index):
@@ -174,6 +191,9 @@ class MainWindow(QMainWindow):
         self.brush_size = int(value)
         self.view.viewport().update()
 
+    # =====================================================
+    # KLASSEN
+    # =====================================================
     def rename_class(self):
         current_name = self.project.classes[self.current_class_index].name
 
@@ -192,73 +212,32 @@ class MainWindow(QMainWindow):
 
     def change_class_color(self):
         current_color = QColor(self.project.classes[self.current_class_index].color)
+
         color = QColorDialog.getColor(current_color, self, "Farbe wählen")
 
         if color.isValid():
             self.project.classes[self.current_class_index].color = color.name()
             self.update_active_class_label()
             self.view.viewport().update()
+
             if self.prediction_mask is not None:
                 self.show_overlay()
 
-    def clear_all_strokes(self):
-        for class_info in self.project.classes:
-            class_info.strokes = []
+    def clear_active_class(self):
+        self.project.classes[self.current_class_index].strokes = []
 
-        self.hovered_stroke = None
-        self.reset_label_mask()
+        if self.hovered_stroke is not None:
+            if self.hovered_stroke[0] == self.current_class_index:
+                self.hovered_stroke = None
 
-    def reset_label_mask(self):
-        if self.image_array is None:
-            self.label_mask = None
-            return
-
-        h, w = self.image_array.shape[:2]
-        self.label_mask = np.full((h, w), -1, dtype=np.int32)
-
-    def reset_ml_state(self):
-        self.feature_stack = None
-        self.feature_names = []
-        self.classifier = None
-        self.prediction_mask = None
-        self.probability_map = None
-        self.clear_overlay()
-
-    def reset_prediction_only(self):
-        self.classifier = None
-        self.prediction_mask = None
-        self.probability_map = None
-        self.clear_overlay()
-
-    def display_pixmap(self, pixmap):
-        self.scene.clear()
-        self.pixmap_item = QGraphicsPixmapItem(pixmap)
-        self.scene.addItem(self.pixmap_item)
-
-        self.scene.setSceneRect(self.pixmap_item.boundingRect())
-        self.view.resetTransform()
-        self.view.fitInView(self.pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
-        self.view.centerOn(self.pixmap_item)
-        self.scene.update()
-        self.view.viewport().update()
-
-    def add_stroke_to_current_class(self, path_points):
-        coords = [(float(p.x()), float(p.y())) for p in path_points]
-
-        if len(coords) < 2:
-            return
-
-        stroke = AnnotationStroke(
-            points=coords,
-            brush_size=self.brush_size
-        )
-        self.project.classes[self.current_class_index].strokes.append(stroke)
-
-        self.paint_stroke_into_label_mask(stroke, self.current_class_index)
+        self.rebuild_label_mask_from_strokes(show_message=False)
         self.reset_prediction_only()
         self.refresh_table()
         self.view.viewport().update()
 
+    # =====================================================
+    # IMAGE / PROJECT
+    # =====================================================
     def load_image(self):
         file, _ = QFileDialog.getOpenFileName(
             self,
@@ -266,72 +245,28 @@ class MainWindow(QMainWindow):
             "",
             "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
         )
+
         if not file:
             return
 
         pixmap = ImageLoader.load_pixmap(file)
         if pixmap.isNull():
-            QMessageBox.warning(self, "Fehler", f"Bild konnte nicht geladen werden:\n{file}")
+            QMessageBox.warning(self, "Fehler", "Bild konnte nicht geladen werden.")
             return
 
         try:
             image_array = ImageLoader.load_numpy_gray(file)
         except Exception as e:
-            QMessageBox.warning(self, "Fehler", f"Bild konnte nicht als NumPy-Array geladen werden:\n{e}")
+            QMessageBox.warning(self, "Fehler", str(e))
             return
 
         self.project.image_path = file
         self.image_array = image_array
+
         self.clear_all_strokes()
         self.reset_ml_state()
         self.refresh_table()
         self.display_pixmap(pixmap)
-
-    def refresh_table(self):
-        self.table.setRowCount(0)
-
-        for class_info in self.project.classes:
-            for stroke in class_info.strokes:
-                row = self.table.rowCount()
-                self.table.insertRow(row)
-
-                points_count = len(stroke.points)
-                brush = stroke.brush_size
-                pixel_count = self.estimate_stroke_pixels(stroke)
-
-                self.table.setItem(row, 0, QTableWidgetItem(class_info.name))
-                self.table.setItem(row, 1, QTableWidgetItem(str(points_count)))
-                self.table.setItem(row, 2, QTableWidgetItem(str(brush)))
-                self.table.setItem(row, 3, QTableWidgetItem(str(pixel_count)))
-
-    def estimate_stroke_pixels(self, stroke):
-        if self.image_array is None:
-            return 0
-
-        temp = Image.new("L", (self.image_array.shape[1], self.image_array.shape[0]), 0)
-        draw = ImageDraw.Draw(temp)
-
-        pts = [(int(round(x)), int(round(y))) for x, y in stroke.points]
-        if len(pts) == 1:
-            r = max(1, stroke.brush_size // 2)
-            x, y = pts[0]
-            draw.ellipse((x - r, y - r, x + r, y + r), fill=255)
-        else:
-            draw.line(pts, fill=255, width=stroke.brush_size)
-
-        arr = np.array(temp, dtype=np.uint8)
-        return int(np.count_nonzero(arr))
-
-    def clear_active_class(self):
-        self.project.classes[self.current_class_index].strokes = []
-
-        if self.hovered_stroke is not None and self.hovered_stroke[0] == self.current_class_index:
-            self.hovered_stroke = None
-
-        self.rebuild_label_mask_from_strokes()
-        self.reset_prediction_only()
-        self.refresh_table()
-        self.view.viewport().update()
 
     def save_project(self):
         if not self.project.image_path:
@@ -344,14 +279,15 @@ class MainWindow(QMainWindow):
             "",
             "JSON Files (*.json)"
         )
+
         if not file:
             return
 
         try:
             ProjectIO.save(self.project, file)
-            QMessageBox.information(self, "Gespeichert", "Projekt wurde gespeichert.")
+            QMessageBox.information(self, "Gespeichert", "Projekt gespeichert.")
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Speichern fehlgeschlagen:\n{e}")
+            QMessageBox.critical(self, "Fehler", str(e))
 
     def load_project(self):
         file, _ = QFileDialog.getOpenFileName(
@@ -360,43 +296,87 @@ class MainWindow(QMainWindow):
             "",
             "JSON Files (*.json)"
         )
+
         if not file:
             return
 
         try:
             loaded_project = ProjectIO.load(file)
 
-            if len(loaded_project.classes) != 8:
-                QMessageBox.warning(self, "Warnung", "Die Datei enthält nicht genau 8 Klassen.")
-                return
-
-            if not os.path.exists(loaded_project.image_path):
-                QMessageBox.warning(self, "Fehler", f"Bilddatei nicht gefunden:\n{loaded_project.image_path}")
-                return
-
             pixmap = ImageLoader.load_pixmap(loaded_project.image_path)
-            if pixmap.isNull():
-                QMessageBox.warning(self, "Fehler", f"Bild konnte nicht geladen werden:\n{loaded_project.image_path}")
-                return
-
             image_array = ImageLoader.load_numpy_gray(loaded_project.image_path)
 
             self.project = loaded_project
             self.image_array = image_array
             self.current_class_index = 0
             self.hovered_stroke = None
+
             self.reset_ml_state()
 
             self.update_class_combo()
             self.update_active_class_label()
             self.display_pixmap(pixmap)
-            self.rebuild_label_mask_from_strokes()
+            self.rebuild_label_mask_from_strokes(show_message=False)
             self.refresh_table()
 
-            QMessageBox.information(self, "Geladen", "Projekt wurde geladen.")
+            QMessageBox.information(self, "Geladen", "Projekt geladen.")
 
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Laden fehlgeschlagen:\n{e}")
+            QMessageBox.critical(self, "Fehler", str(e))
+
+    # =====================================================
+    # DRAWING
+    # =====================================================
+    def clear_all_strokes(self):
+        for class_info in self.project.classes:
+            class_info.strokes = []
+
+        self.hovered_stroke = None
+        self.reset_label_mask()
+
+    def display_pixmap(self, pixmap):
+        self.scene.clear()
+
+        self.pixmap_item = QGraphicsPixmapItem(pixmap)
+        self.scene.addItem(self.pixmap_item)
+
+        self.scene.setSceneRect(self.pixmap_item.boundingRect())
+        self.view.resetTransform()
+        self.view.fitInView(self.pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
+        self.view.centerOn(self.pixmap_item)
+
+    def detect_stroke_type(self, points, brush_size):
+        if len(points) < 3:
+            return "Stroke"
+
+        x1, y1 = points[0]
+        x2, y2 = points[-1]
+
+        dist = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+
+        if dist <= max(8, brush_size * 2):
+            return "ROI"
+
+        return "Stroke"
+
+    def add_stroke_to_current_class(self, path_points):
+        coords = [(float(p.x()), float(p.y())) for p in path_points]
+
+        if len(coords) < 2:
+            return
+
+        stroke = AnnotationStroke(
+            points=coords,
+            brush_size=self.brush_size,
+            stroke_type=self.detect_stroke_type(coords, self.brush_size)
+        )
+
+        self.project.classes[self.current_class_index].strokes.append(stroke)
+
+        self.paint_stroke_into_label_mask(stroke, self.current_class_index)
+        self.reset_prediction_only()
+        self.refresh_table()
+        self.view.viewport().update()
 
     def set_hovered_stroke(self, stroke_id):
         self.hovered_stroke = stroke_id
@@ -408,19 +388,13 @@ class MainWindow(QMainWindow):
 
         class_index, stroke_index = stroke_id
 
-        if class_index < 0 or class_index >= len(self.project.classes):
-            self.hovered_stroke = None
+        try:
+            del self.project.classes[class_index].strokes[stroke_index]
+        except Exception:
             return
 
-        strokes = self.project.classes[class_index].strokes
-
-        if stroke_index < 0 or stroke_index >= len(strokes):
-            self.hovered_stroke = None
-            return
-
-        del strokes[stroke_index]
         self.hovered_stroke = None
-        self.rebuild_label_mask_from_strokes()
+        self.rebuild_label_mask_from_strokes(show_message=False)
         self.reset_prediction_only()
         self.refresh_table()
         self.view.viewport().update()
@@ -483,6 +457,17 @@ class MainWindow(QMainWindow):
 
         return None
 
+    # =====================================================
+    # MASK
+    # =====================================================
+    def reset_label_mask(self):
+        if self.image_array is None:
+            self.label_mask = None
+            return
+
+        h, w = self.image_array.shape[:2]
+        self.label_mask = np.full((h, w), -1, dtype=np.int32)
+
     def paint_stroke_into_label_mask(self, stroke, class_index):
         if self.label_mask is None:
             return
@@ -493,37 +478,86 @@ class MainWindow(QMainWindow):
 
         pts = [(int(round(x)), int(round(y))) for x, y in stroke.points]
 
-        if len(pts) == 1:
-            r = max(1, stroke.brush_size // 2)
-            x, y = pts[0]
-            draw.ellipse((x - r, y - r, x + r, y + r), fill=255)
+        if stroke.stroke_type == "ROI":
+            draw.polygon(pts, fill=255)
         else:
             draw.line(pts, fill=255, width=stroke.brush_size)
 
-        mask = np.array(temp, dtype=np.uint8) > 0
+        mask = np.array(temp) > 0
         self.label_mask[mask] = class_index
 
-    def rebuild_label_mask_from_strokes(self):
+    def rebuild_label_mask_from_strokes(self, show_message=True):
         self.reset_label_mask()
 
         if self.label_mask is None:
-            QMessageBox.warning(self, "Fehler", "Keine Bilddaten vorhanden.")
             return
-
-        stroke_count = 0
 
         for class_index, class_info in enumerate(self.project.classes):
             for stroke in class_info.strokes:
                 self.paint_stroke_into_label_mask(stroke, class_index)
-                stroke_count += 1
 
-        QMessageBox.information(
-            self,
-            "Maske neu aufgebaut",
-            f"Fertig!\n\n"
-            f"{stroke_count} Strokes verarbeitet.\n"
-            f"Maske wurde erfolgreich aktualisiert."
-        )
+        self.refresh_table()
+
+        if show_message:
+            QMessageBox.information(self, "OK", "Maske erfolgreich neu aufgebaut.")
+
+    # =====================================================
+    # TABLE
+    # =====================================================
+    def refresh_table(self):
+        self.table.setRowCount(0)
+
+        for class_info in self.project.classes:
+            for stroke in class_info.strokes:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+
+                pixel_count = self.estimate_stroke_pixels(stroke)
+
+                self.table.setItem(row, 0, QTableWidgetItem(class_info.name))
+                self.table.setItem(row, 1, QTableWidgetItem(stroke.stroke_type))
+                self.table.setItem(row, 2, QTableWidgetItem(str(len(stroke.points))))
+                self.table.setItem(row, 3, QTableWidgetItem(str(stroke.brush_size)))
+                self.table.setItem(row, 4, QTableWidgetItem(str(pixel_count)))
+
+    def estimate_stroke_pixels(self, stroke):
+        if self.image_array is None:
+            return 0
+
+        temp = Image.new("L", (self.image_array.shape[1], self.image_array.shape[0]), 0)
+        draw = ImageDraw.Draw(temp)
+
+        pts = [(int(round(x)), int(round(y))) for x, y in stroke.points]
+
+        if stroke.stroke_type == "ROI":
+            draw.polygon(pts, fill=255)
+        else:
+            if len(pts) == 1:
+                r = max(1, stroke.brush_size // 2)
+                x, y = pts[0]
+                draw.ellipse((x - r, y - r, x + r, y + r), fill=255)
+            else:
+                draw.line(pts, fill=255, width=stroke.brush_size)
+
+        arr = np.array(temp, dtype=np.uint8)
+        return int(np.count_nonzero(arr))
+
+    # =====================================================
+    # ML
+    # =====================================================
+    def reset_ml_state(self):
+        self.feature_stack = None
+        self.feature_names = []
+        self.classifier = None
+        self.prediction_mask = None
+        self.probability_map = None
+        self.clear_overlay()
+
+    def reset_prediction_only(self):
+        self.classifier = None
+        self.prediction_mask = None
+        self.probability_map = None
+        self.clear_overlay()
 
     def extract_features(self):
         if self.image_array is None:
@@ -532,59 +566,32 @@ class MainWindow(QMainWindow):
 
         try:
             self.feature_stack, self.feature_names = FeatureExtractor.extract_features(self.image_array)
-
             QMessageBox.information(
                 self,
-                "Features berechnet",
-                f"{len(self.feature_names)} Features wurden berechnet:\n\n" +
-                "\n".join(self.feature_names)
+                "Features",
+                f"{len(self.feature_names)} Features berechnet."
             )
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Feature-Berechnung fehlgeschlagen:\n{e}")
+            QMessageBox.critical(self, "Fehler", str(e))
 
     def train_model(self):
-        if self.image_array is None:
-            QMessageBox.warning(self, "Fehler", "Bitte zuerst ein Bild laden.")
-            return
-
         if self.label_mask is None:
             QMessageBox.warning(self, "Fehler", "Keine Label-Maske vorhanden.")
             return
 
         if self.feature_stack is None:
-            QMessageBox.information(self, "Hinweis", "Features werden zuerst berechnet.")
             self.extract_features()
-
             if self.feature_stack is None:
                 return
 
         try:
             X, y = TrainingEngine.build_training_set(self.feature_stack, self.label_mask)
             self.classifier = TrainingEngine.train_random_forest(X, y)
-
-            class_counts = {}
-            for class_id in np.unique(y):
-                class_counts[int(class_id)] = int(np.sum(y == class_id))
-
-            info = "\n".join(
-                f"{self.project.classes[class_id].name}: {count} Pixel"
-                for class_id, count in class_counts.items()
-            )
-
-            QMessageBox.information(
-                self,
-                "Training erfolgreich",
-                f"Modell wurde trainiert.\n\nTrainingspixel pro Klasse:\n{info}"
-            )
-
+            QMessageBox.information(self, "Training", "Training erfolgreich.")
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Training fehlgeschlagen:\n{e}")
+            QMessageBox.critical(self, "Fehler", str(e))
 
     def predict_segmentation(self):
-        if self.image_array is None:
-            QMessageBox.warning(self, "Fehler", "Bitte zuerst ein Bild laden.")
-            return
-
         if self.classifier is None:
             QMessageBox.warning(self, "Fehler", "Bitte zuerst trainieren.")
             return
@@ -598,42 +605,15 @@ class MainWindow(QMainWindow):
                 self.feature_stack,
                 self.classifier
             )
-
             self.overlay_visible = True
             self.show_overlay()
-
-            QMessageBox.information(
-                self,
-                "Segmentierung fertig",
-                f"Vorhersage berechnet: {self.prediction_mask.shape[1]} x {self.prediction_mask.shape[0]}"
-            )
-
-            self.show_prediction_summary()
-
+            QMessageBox.information(self, "Fertig", "Segmentierung abgeschlossen.")
         except Exception as e:
-            QMessageBox.critical(self, "Fehler", f"Segmentierung fehlgeschlagen:\n{e}")
+            QMessageBox.critical(self, "Fehler", str(e))
 
-    def show_prediction_summary(self):
-        if self.prediction_mask is None:
-            return
-
-        unique_classes, counts = np.unique(self.prediction_mask, return_counts=True)
-
-        lines = []
-        for class_id, count in zip(unique_classes, counts):
-            if 0 <= int(class_id) < len(self.project.classes):
-                class_name = self.project.classes[int(class_id)].name
-            else:
-                class_name = f"Class {class_id}"
-
-            lines.append(f"{class_name}: {int(count)} Pixel")
-
-        QMessageBox.information(
-            self,
-            "Vorhersage-Zusammenfassung",
-            "\n".join(lines)
-        )
-
+    # =====================================================
+    # OVERLAY
+    # =====================================================
     def create_overlay_pixmap(self):
         if self.prediction_mask is None:
             return None
@@ -643,12 +623,11 @@ class MainWindow(QMainWindow):
 
         for class_index, class_info in enumerate(self.project.classes):
             color = QColor(class_info.color)
-            r, g, b = color.red(), color.green(), color.blue()
-
             mask = self.prediction_mask == class_index
-            rgba[mask, 0] = r
-            rgba[mask, 1] = g
-            rgba[mask, 2] = b
+
+            rgba[mask, 0] = color.red()
+            rgba[mask, 1] = color.green()
+            rgba[mask, 2] = color.blue()
             rgba[mask, 3] = int(255 * self.overlay_opacity)
 
         qimage = QImage(
@@ -662,16 +641,12 @@ class MainWindow(QMainWindow):
         return QPixmap.fromImage(qimage.copy())
 
     def show_overlay(self):
-        if self.prediction_mask is None:
-            return
-
         pixmap = self.create_overlay_pixmap()
         if pixmap is None:
             return
 
         if self.overlay_item is not None:
             self.scene.removeItem(self.overlay_item)
-            self.overlay_item = None
 
         self.overlay_item = QGraphicsPixmapItem(pixmap)
         self.overlay_item.setZValue(10)
@@ -694,7 +669,7 @@ class MainWindow(QMainWindow):
         value, ok = QInputDialog.getDouble(
             self,
             "Transparenz",
-            "Wert (0.0 - 1.0):",
+            "Wert 0.0 - 1.0:",
             value=self.overlay_opacity,
             min=0.0,
             max=1.0,
@@ -703,39 +678,29 @@ class MainWindow(QMainWindow):
 
         if ok:
             self.overlay_opacity = float(value)
-            if self.prediction_mask is not None:
-                self.show_overlay()
+            self.show_overlay()
 
     def save_segmented_image(self):
-        if self.pixmap_item is None:
-            QMessageBox.warning(self, "Fehler", "Kein Bild geladen.")
-            return
-
-        if self.prediction_mask is None:
+        if self.prediction_mask is None or self.pixmap_item is None:
             QMessageBox.warning(self, "Fehler", "Bitte zuerst segmentieren.")
             return
 
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Segmentiertes Bild speichern",
+            "Speichern",
             "",
             "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg);;BMP Files (*.bmp)"
         )
+
         if not file_path:
             return
 
         try:
-            base_pixmap = self.pixmap_item.pixmap()
-
-            if base_pixmap.isNull():
-                QMessageBox.warning(self, "Fehler", "Originalbild konnte nicht gelesen werden.")
-                return
-
-            result = QPixmap(base_pixmap.size())
+            result = QPixmap(self.pixmap_item.pixmap().size())
             result.fill(Qt.GlobalColor.transparent)
 
             painter = QPainter(result)
-            painter.drawPixmap(0, 0, base_pixmap)
+            painter.drawPixmap(0, 0, self.pixmap_item.pixmap())
 
             overlay = self.create_overlay_pixmap()
             if overlay is not None:
@@ -746,19 +711,13 @@ class MainWindow(QMainWindow):
             if not result.save(file_path):
                 raise RuntimeError("Die Datei konnte nicht gespeichert werden.")
 
-            QMessageBox.information(
-                self,
-                "Gespeichert",
-                f"Segmentiertes Bild wurde gespeichert:\n{file_path}"
-            )
-
+            QMessageBox.information(self, "Gespeichert", "Bild gespeichert.")
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Fehler",
-                f"Speichern des segmentierten Bildes fehlgeschlagen:\n{e}"
-            )
+            QMessageBox.critical(self, "Fehler", str(e))
 
+    # =====================================================
+    # KEYBOARD
+    # =====================================================
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key.Key_Control:
             self.hovered_stroke = None

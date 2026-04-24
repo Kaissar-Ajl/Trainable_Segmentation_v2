@@ -11,7 +11,7 @@ class ProjectIO:
         relative_image_path = os.path.relpath(project.image_path, project_dir)
 
         data = {
-            "version": 2,
+            "version": 3,
             "image_path": relative_image_path,
             "classes": [
                 {
@@ -21,6 +21,7 @@ class ProjectIO:
                         {
                             "points": stroke.points,
                             "brush_size": stroke.brush_size,
+                            "stroke_type": stroke.stroke_type,
                         }
                         for stroke in c.strokes
                     ],
@@ -54,10 +55,18 @@ class ProjectIO:
 
             # Neues Format
             for stroke_raw in item.get("strokes", []):
+                points = stroke_raw.get("points", [])
+                brush_size = int(stroke_raw.get("brush_size", 8))
+                stroke_type = stroke_raw.get("stroke_type")
+
+                if stroke_type not in ("ROI", "Stroke"):
+                    stroke_type = ProjectIO.detect_stroke_type(points, brush_size)
+
                 strokes.append(
                     AnnotationStroke(
-                        points=stroke_raw.get("points", []),
-                        brush_size=int(stroke_raw.get("brush_size", 8))
+                        points=points,
+                        brush_size=brush_size,
+                        stroke_type=stroke_type
                     )
                 )
 
@@ -67,7 +76,8 @@ class ProjectIO:
                     strokes.append(
                         AnnotationStroke(
                             points=old_path,
-                            brush_size=8
+                            brush_size=8,
+                            stroke_type=ProjectIO.detect_stroke_type(old_path, 8)
                         )
                     )
 
@@ -83,3 +93,21 @@ class ProjectIO:
             image_path=resolved_image_path,
             classes=classes
         )
+
+    @staticmethod
+    def detect_stroke_type(points, brush_size):
+        pts = [(int(round(x)), int(round(y))) for x, y in points]
+
+        if len(pts) < 3:
+            return "Stroke"
+
+        x1, y1 = pts[0]
+        x2, y2 = pts[-1]
+
+        dist = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+        close_threshold = max(8, brush_size * 2)
+
+        if dist <= close_threshold:
+            return "ROI"
+
+        return "Stroke"
