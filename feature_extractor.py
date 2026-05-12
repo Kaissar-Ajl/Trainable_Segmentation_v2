@@ -12,60 +12,76 @@ class FeatureExtractor:
         return image
 
     @staticmethod
-    def extract_features(image: np.ndarray) -> tuple[np.ndarray, list[str]]:
-        """
-        Returns:
-            feature_stack: (H, W, F)
-            feature_names: list[str]
-        """
+    def extract_features(image: np.ndarray, selected_features=None) -> tuple[np.ndarray, list[str]]:
         image = FeatureExtractor.normalize_image(image)
+
+        if selected_features is None:
+            selected_features = [
+                "intensity",
+                "gaussian_sigma_1",
+                "gaussian_sigma_2",
+                "gaussian_sigma_4",
+                "sobel",
+                "laplace",
+                "dog_1_2",
+                "dog_2_4",
+                "median_3",
+                "gaussian_gradient_magnitude_2",
+            ]
 
         features = []
         names = []
 
-        # Raw intensity
-        features.append(image)
-        names.append("intensity")
-        
-        # Gaussian blur - Glättung in verschiedenen Größen.
-        # Hilft, Strukturen auf mehreren Skalen zu erkennen.
+        g1 = g2 = g4 = None
 
-        g1 = gaussian(image, sigma=1, preserve_range=True)
-        g2 = gaussian(image, sigma=2, preserve_range=True)
-        g4 = gaussian(image, sigma=4, preserve_range=True)
+        def add_feature(name, arr):
+            if name in selected_features:
+                features.append(arr)
+                names.append(name)
 
-        features.extend([g1, g2, g4])
-        names.extend([
-            "gaussian_sigma_1",
-            "gaussian_sigma_2",
-            "gaussian_sigma_4"
-        ])
+        add_feature("intensity", image)
 
-        # Sobel edge Erkennt Kanten und Richtungsänderungen.
-        s = sobel(image)
-        features.append(s)
-        names.append("sobel")
+        if any(f in selected_features for f in ["gaussian_sigma_1", "dog_1_2"]):
+            g1 = gaussian(image, sigma=1, preserve_range=True)
 
-        # Laplace Betont Übergänge.
-        l = laplace(image, ksize=3)
-        features.append(l)
-        names.append("laplace")
+        if any(f in selected_features for f in ["gaussian_sigma_2", "dog_1_2", "dog_2_4"]):
+            g2 = gaussian(image, sigma=2, preserve_range=True)
 
-        # Difference of Gaussians 
-        dog_1_2 = g1 - g2
-        dog_2_4 = g2 - g4
-        features.extend([dog_1_2, dog_2_4])
-        names.extend(["dog_1_2", "dog_2_4"])
+        if any(f in selected_features for f in ["gaussian_sigma_4", "dog_2_4"]):
+            g4 = gaussian(image, sigma=4, preserve_range=True)
 
-        # Median
-        m3 = ndi.median_filter(image, size=3)
-        features.append(m3)
-        names.append("median_3")
+        if g1 is not None:
+            add_feature("gaussian_sigma_1", g1)
 
-        # Gradient magnitude
-        grad = ndi.gaussian_gradient_magnitude(image, sigma=2)
-        features.append(grad)
-        names.append("gaussian_gradient_magnitude_2")
+        if g2 is not None:
+            add_feature("gaussian_sigma_2", g2)
+
+        if g4 is not None:
+            add_feature("gaussian_sigma_4", g4)
+
+        if "sobel" in selected_features:
+            add_feature("sobel", sobel(image))
+
+        if "laplace" in selected_features:
+            add_feature("laplace", laplace(image, ksize=3))
+
+        if "dog_1_2" in selected_features:
+            add_feature("dog_1_2", g1 - g2)
+
+        if "dog_2_4" in selected_features:
+            add_feature("dog_2_4", g2 - g4)
+
+        if "median_3" in selected_features:
+            add_feature("median_3", ndi.median_filter(image, size=3))
+
+        if "gaussian_gradient_magnitude_2" in selected_features:
+            add_feature(
+                "gaussian_gradient_magnitude_2",
+                ndi.gaussian_gradient_magnitude(image, sigma=2)
+            )
+
+        if not features:
+            raise ValueError("Es wurde kein Feature ausgewählt.")
 
         feature_stack = np.stack(features, axis=-1).astype(np.float32)
         return feature_stack, names

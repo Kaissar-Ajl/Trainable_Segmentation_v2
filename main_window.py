@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QGraphicsScene, QGraphicsPixmapItem,
     QVBoxLayout, QWidget, QTableWidget, QTableWidgetItem, QPushButton,
     QHBoxLayout, QComboBox, QInputDialog, QColorDialog, QMessageBox, QLabel,
-    QHeaderView, QAbstractItemView, QSpinBox
+    QHeaderView, QAbstractItemView, QSpinBox, QDialog, QFormLayout, QDialogButtonBox, QCheckBox
 )
 from PyQt6.QtGui import QColor, QPixmap, QImage, QPainter
 from PyQt6.QtCore import Qt
@@ -47,6 +47,25 @@ class MainWindow(QMainWindow):
         self.overlay_item = None
         self.overlay_visible = True
         self.overlay_opacity = 0.5
+
+        # Dynamische Klassifikator-Einstellungen
+        self.rf_n_estimators = 500
+        self.rf_max_features = "sqrt"
+        self.rf_class_weight = "balanced"
+
+        # Dynamische Feature-Auswahl
+        self.feature_options = {
+            "intensity": True,
+            "gaussian_sigma_1": True,
+            "gaussian_sigma_2": True,
+            "gaussian_sigma_4": True,
+            "sobel": True,
+            "laplace": True,
+            "dog_1_2": True,
+            "dog_2_4": True,
+            "median_3": True,
+            "gaussian_gradient_magnitude_2": True,
+        }
 
         self.scene = QGraphicsScene()
         self.view = GraphicsView(self.scene, self)
@@ -155,6 +174,12 @@ class MainWindow(QMainWindow):
         action_save_segmented = file_menu.addAction("Segmentiertes Bild speichern")
         action_save_segmented.triggered.connect(self.save_segmented_image)
 
+        # Einstellungen
+        settings_menu = menu_bar.addMenu("Einstellungen")
+
+        action_training_settings = settings_menu.addAction("Klassifikator und Features einstellen")
+        action_training_settings.triggered.connect(self.open_training_settings_dialog)
+
         # Klassen
         class_menu = menu_bar.addMenu("Klassen")
 
@@ -201,6 +226,83 @@ class MainWindow(QMainWindow):
     def change_brush_size(self, value):
         self.brush_size = int(value)
         self.view.viewport().update()
+
+    # =====================================================
+    # EINSTELLUNGEN
+    # =====================================================
+    def open_training_settings_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Klassifikator und Features einstellen")
+
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+
+        n_estimators_spin = QSpinBox()
+        n_estimators_spin.setRange(50, 2000)
+        n_estimators_spin.setSingleStep(50)
+        n_estimators_spin.setValue(self.rf_n_estimators)
+        form.addRow("Anzahl Bäume:", n_estimators_spin)
+
+        max_features_combo = QComboBox()
+        max_features_combo.addItems(["sqrt", "log2", "None"])
+        max_features_combo.setCurrentText(str(self.rf_max_features))
+        form.addRow("Max Features:", max_features_combo)
+
+        class_weight_combo = QComboBox()
+        class_weight_combo.addItems(["balanced", "balanced_subsample", "None"])
+        class_weight_combo.setCurrentText(str(self.rf_class_weight))
+        form.addRow("Class Weight:", class_weight_combo)
+
+        layout.addLayout(form)
+
+        layout.addWidget(QLabel("Features auswählen:"))
+        feature_checkboxes = {}
+
+        for feature_name, enabled in self.feature_options.items():
+            checkbox = QCheckBox(feature_name)
+            checkbox.setChecked(enabled)
+            feature_checkboxes[feature_name] = checkbox
+            layout.addWidget(checkbox)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        layout.addWidget(buttons)
+
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            selected_count = sum(1 for checkbox in feature_checkboxes.values() if checkbox.isChecked())
+
+            if selected_count == 0:
+                QMessageBox.warning(self, "Fehler", "Bitte mindestens ein Feature auswählen.")
+                return
+
+            self.rf_n_estimators = int(n_estimators_spin.value())
+
+            max_features_value = max_features_combo.currentText()
+            self.rf_max_features = None if max_features_value == "None" else max_features_value
+
+            class_weight_value = class_weight_combo.currentText()
+            self.rf_class_weight = None if class_weight_value == "None" else class_weight_value
+
+            for feature_name, checkbox in feature_checkboxes.items():
+                self.feature_options[feature_name] = checkbox.isChecked()
+
+            # Wenn Features geändert wurden, müssen sie beim nächsten Training neu berechnet werden.
+            self.feature_stack = None
+            self.feature_names = []
+            self.reset_prediction_only()
+
+            QMessageBox.information(self, "OK", "Einstellungen wurden übernommen.")
+
+    def get_selected_feature_names(self):
+        return [
+            feature_name
+            for feature_name, enabled in self.feature_options.items()
+            if enabled
+        ]
 
     # =====================================================
     # KLASSEN
@@ -584,7 +686,10 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self.feature_stack, self.feature_names = FeatureExtractor.extract_features(self.image_array)
+            self.feature_stack, self.feature_names = FeatureExtractor.extract_features(
+                self.image_array,
+                selected_features=self.get_selected_feature_names()
+            )
             QMessageBox.information(
                 self,
                 "Features",
@@ -606,10 +711,19 @@ class MainWindow(QMainWindow):
             # Beim Löschen/Ändern von Markierungen bleibt das Bild gleich,
             # daher können vorhandene Features weiterverwendet werden.
             if self.feature_stack is None:
-                self.feature_stack, self.feature_names = FeatureExtractor.extract_features(self.image_array)
+                self.feature_stack, self.feature_names = FeatureExtractor.extract_features(
+                    self.image_array,
+                    selected_features=self.get_selected_feature_names()
+                )
 
             X, y = TrainingEngine.build_training_set(self.feature_stack, self.label_mask)
-            self.classifier = TrainingEngine.train_random_forest(X, y)
+            self.classifier = TrainingEngine.train_random_forest(
+                X,
+                y,
+                n_estimators=self.rf_n_estimators,
+                max_features=self.rf_max_features,
+                class_weight=self.rf_class_weight
+            )
             self.prediction_mask = None
             self.probability_map = None
             self.clear_overlay()
@@ -666,6 +780,10 @@ class MainWindow(QMainWindow):
                 "feature_names": self.feature_names,
                 "class_names": [class_info.name for class_info in self.project.classes],
                 "class_colors": [class_info.color for class_info in self.project.classes],
+                "rf_n_estimators": self.rf_n_estimators,
+                "rf_max_features": self.rf_max_features,
+                "rf_class_weight": self.rf_class_weight,
+                "feature_options": self.feature_options,
             }
 
             joblib.dump(model_data, file_path)
@@ -693,6 +811,16 @@ class MainWindow(QMainWindow):
                 self.feature_names = model_data.get("feature_names", [])
                 class_names = model_data.get("class_names", [])
                 class_colors = model_data.get("class_colors", [])
+
+                self.rf_n_estimators = int(model_data.get("rf_n_estimators", self.rf_n_estimators))
+                self.rf_max_features = model_data.get("rf_max_features", self.rf_max_features)
+                self.rf_class_weight = model_data.get("rf_class_weight", self.rf_class_weight)
+
+                loaded_feature_options = model_data.get("feature_options", None)
+                if isinstance(loaded_feature_options, dict):
+                    for feature_name in self.feature_options:
+                        if feature_name in loaded_feature_options:
+                            self.feature_options[feature_name] = bool(loaded_feature_options[feature_name])
 
                 for i, name in enumerate(class_names):
                     if i < len(self.project.classes):
@@ -771,14 +899,18 @@ class MainWindow(QMainWindow):
         # Header
         headers = ["Bild"]
         for class_info in self.project.classes:
-            headers.append(f"{class_info.name} %")
+            # Klassenname direkt als Excel-Spalte verwenden
+            headers.append(class_info.name)
 
         sheet.append(headers)
 
         for image_path in image_paths:
             try:
                 image_array = ImageLoader.load_numpy_gray(image_path)
-                feature_stack, _ = FeatureExtractor.extract_features(image_array)
+                feature_stack, _ = FeatureExtractor.extract_features(
+                    image_array,
+                    selected_features=self.get_selected_feature_names()
+                )
 
                 prediction_mask = TrainingEngine.predict_full_image(
                     feature_stack,
@@ -817,13 +949,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Batch abgeschlossen mit Fehlern",
-                f"Gespeichert: {saved_count} Bild(er).\\n\\nExcel: {excel_path}\\n\\nFehler:\\n" + "\\n".join(failed_files)
+                f"Gespeichert: {saved_count} Bild(er).\n\nExcel: {excel_path}\n\nFehler:\n" + "\n".join(failed_files)
             )
         else:
             QMessageBox.information(
                 self,
                 "Batch fertig",
-                f"Alle {saved_count} Bild(er) wurden segmentiert.\\n\\nExcel gespeichert:\\n{excel_path}"
+                f"Alle {saved_count} Bild(er) wurden segmentiert.\n\nExcel gespeichert:\n{excel_path}"
             )
 
     # =====================================================
