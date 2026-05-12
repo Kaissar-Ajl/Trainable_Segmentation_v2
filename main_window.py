@@ -1,5 +1,7 @@
 import os
 import math
+import joblib
+from openpyxl import Workbook
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -72,17 +74,14 @@ class MainWindow(QMainWindow):
         self.brush_spin.valueChanged.connect(self.change_brush_size)
 
         # Sichtbare Segmentierungs-Buttons
-        rebuild_mask_button = QPushButton("Maske neu aufbauen")
-        rebuild_mask_button.clicked.connect(self.rebuild_label_mask_from_strokes)
-
-        extract_features_button = QPushButton("Features berechnen")
-        extract_features_button.clicked.connect(self.extract_features)
-
         train_button = QPushButton("Trainieren")
         train_button.clicked.connect(self.train_model)
 
         predict_button = QPushButton("Segmentieren")
         predict_button.clicked.connect(self.predict_segmentation)
+
+        batch_button = QPushButton("Mehrere Bilder segmentieren")
+        batch_button.clicked.connect(self.batch_segment_images)
 
         toggle_overlay_button = QPushButton("Overlay AN/AUS")
         toggle_overlay_button.clicked.connect(self.toggle_overlay)
@@ -100,10 +99,9 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(QLabel("Brush:"))
         top_layout.addWidget(self.brush_spin)
         top_layout.addSpacing(20)
-        top_layout.addWidget(rebuild_mask_button)
-        top_layout.addWidget(extract_features_button)
         top_layout.addWidget(train_button)
         top_layout.addWidget(predict_button)
+        top_layout.addWidget(batch_button)
         top_layout.addWidget(toggle_overlay_button)
         top_layout.addWidget(opacity_button)
         top_layout.addStretch()
@@ -138,6 +136,19 @@ class MainWindow(QMainWindow):
 
         action_load_project = file_menu.addAction("Projekt laden")
         action_load_project.triggered.connect(self.load_project)
+
+        file_menu.addSeparator()
+
+        action_save_classifier = file_menu.addAction("Klassifikator speichern")
+        action_save_classifier.triggered.connect(self.save_classifier)
+
+        action_load_classifier = file_menu.addAction("Klassifikator laden")
+        action_load_classifier.triggered.connect(self.load_classifier)
+
+        file_menu.addSeparator()
+
+        action_batch_segment = file_menu.addAction("Mehrere Bilder segmentieren")
+        action_batch_segment.triggered.connect(self.batch_segment_images)
 
         file_menu.addSeparator()
 
@@ -230,7 +241,8 @@ class MainWindow(QMainWindow):
             if self.hovered_stroke[0] == self.current_class_index:
                 self.hovered_stroke = None
 
-        self.rebuild_label_mask_from_strokes(show_message=False)
+        # Keine Masken-Neuberechnung hier.
+        # Erst beim nächsten Trainieren wird die Label-Maske neu erzeugt.
         self.reset_prediction_only()
         self.refresh_table()
         self.view.viewport().update()
@@ -373,7 +385,10 @@ class MainWindow(QMainWindow):
 
         self.project.classes[self.current_class_index].strokes.append(stroke)
 
-        self.paint_stroke_into_label_mask(stroke, self.current_class_index)
+        # WICHTIG FÜR GROSSE BILDER:
+        # Die Label-Maske wird hier NICHT mehr direkt aktualisiert.
+        # Sonst kann das Programm beim Markieren großer Bilder hängen.
+        # Die Maske wird erst beim Klick auf "Trainieren" komplett neu aufgebaut.
         self.reset_prediction_only()
         self.refresh_table()
         self.view.viewport().update()
@@ -394,7 +409,8 @@ class MainWindow(QMainWindow):
             return
 
         self.hovered_stroke = None
-        self.rebuild_label_mask_from_strokes(show_message=False)
+        # Keine Masken-Neuberechnung hier.
+        # Erst beim nächsten Trainieren wird die Label-Maske neu erzeugt.
         self.reset_prediction_only()
         self.refresh_table()
         self.view.viewport().update()
@@ -512,7 +528,10 @@ class MainWindow(QMainWindow):
                 row = self.table.rowCount()
                 self.table.insertRow(row)
 
-                pixel_count = self.estimate_stroke_pixels(stroke)
+                # WICHTIG FÜR GROSSE BILDER:
+                # Pixel werden hier nicht mehr live berechnet,
+                # weil das bei großen Bildern sehr langsam werden kann.
+                pixel_count = "-"
 
                 self.table.setItem(row, 0, QTableWidgetItem(class_info.name))
                 self.table.setItem(row, 1, QTableWidgetItem(stroke.stroke_type))
@@ -575,25 +594,37 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Fehler", str(e))
 
     def train_model(self):
-        if self.label_mask is None:
-            QMessageBox.warning(self, "Fehler", "Keine Label-Maske vorhanden.")
+        if self.image_array is None:
+            QMessageBox.warning(self, "Fehler", "Bitte zuerst ein Bild laden.")
             return
 
-        if self.feature_stack is None:
-            self.extract_features()
-            if self.feature_stack is None:
-                return
-
         try:
+            # Maske wird erst beim Trainieren aus allen aktuellen Markierungen neu aufgebaut.
+            self.rebuild_label_mask_from_strokes(show_message=False)
+
+            # Features nur berechnen, wenn noch keine vorhanden sind.
+            # Beim Löschen/Ändern von Markierungen bleibt das Bild gleich,
+            # daher können vorhandene Features weiterverwendet werden.
+            if self.feature_stack is None:
+                self.feature_stack, self.feature_names = FeatureExtractor.extract_features(self.image_array)
+
             X, y = TrainingEngine.build_training_set(self.feature_stack, self.label_mask)
             self.classifier = TrainingEngine.train_random_forest(X, y)
-            QMessageBox.information(self, "Training", "Training erfolgreich.")
+            self.prediction_mask = None
+            self.probability_map = None
+            self.clear_overlay()
+
+            QMessageBox.information(
+                self,
+                "Training",
+                f"Training erfolgreich.\nFeatures: {len(self.feature_names)}"
+            )
         except Exception as e:
             QMessageBox.critical(self, "Fehler", str(e))
 
     def predict_segmentation(self):
         if self.classifier is None:
-            QMessageBox.warning(self, "Fehler", "Bitte zuerst trainieren.")
+            QMessageBox.warning(self, "Fehler", "Bitte zuerst trainieren oder Klassifikator laden.")
             return
 
         if self.feature_stack is None:
@@ -610,6 +641,190 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Fertig", "Segmentierung abgeschlossen.")
         except Exception as e:
             QMessageBox.critical(self, "Fehler", str(e))
+
+    def save_classifier(self):
+        if self.classifier is None:
+            QMessageBox.warning(self, "Fehler", "Bitte zuerst trainieren.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Klassifikator speichern",
+            "classifier.pkl",
+            "Pickle Files (*.pkl)"
+        )
+
+        if not file_path:
+            return
+
+        if not file_path.lower().endswith(".pkl"):
+            file_path += ".pkl"
+
+        try:
+            model_data = {
+                "classifier": self.classifier,
+                "feature_names": self.feature_names,
+                "class_names": [class_info.name for class_info in self.project.classes],
+                "class_colors": [class_info.color for class_info in self.project.classes],
+            }
+
+            joblib.dump(model_data, file_path)
+            QMessageBox.information(self, "Gespeichert", "Klassifikator wurde gespeichert.")
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", str(e))
+
+    def load_classifier(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Klassifikator laden",
+            "",
+            "Pickle Files (*.pkl)"
+        )
+
+        if not file_path:
+            return
+
+        try:
+            model_data = joblib.load(file_path)
+
+            # Neues Format: Dictionary mit Klassifikator + Metadaten
+            if isinstance(model_data, dict):
+                self.classifier = model_data.get("classifier")
+                self.feature_names = model_data.get("feature_names", [])
+                class_names = model_data.get("class_names", [])
+                class_colors = model_data.get("class_colors", [])
+
+                for i, name in enumerate(class_names):
+                    if i < len(self.project.classes):
+                        self.project.classes[i].name = name
+
+                for i, color in enumerate(class_colors):
+                    if i < len(self.project.classes):
+                        self.project.classes[i].color = color
+
+                self.update_class_combo()
+                self.update_active_class_label()
+            else:
+                # Altes Format: direkt gespeicherter Klassifikator
+                self.classifier = model_data
+
+            if self.classifier is None:
+                raise RuntimeError("In der Datei wurde kein gültiger Klassifikator gefunden.")
+
+            self.prediction_mask = None
+            self.probability_map = None
+            self.clear_overlay()
+
+            QMessageBox.information(self, "Geladen", "Klassifikator wurde geladen.")
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", str(e))
+
+    def create_color_segmentation_image(self, prediction_mask):
+        h, w = prediction_mask.shape
+        rgb = np.zeros((h, w, 3), dtype=np.uint8)
+
+        for class_index, class_info in enumerate(self.project.classes):
+            color = QColor(class_info.color)
+            mask = prediction_mask == class_index
+
+            rgb[mask, 0] = color.red()
+            rgb[mask, 1] = color.green()
+            rgb[mask, 2] = color.blue()
+
+        return Image.fromarray(rgb, mode="RGB")
+
+    def batch_segment_images(self):
+        if self.classifier is None:
+            QMessageBox.warning(
+                self,
+                "Fehler",
+                "Bitte zuerst trainieren oder einen Klassifikator laden."
+            )
+            return
+
+        image_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Bilder auswählen",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
+        )
+
+        if not image_paths:
+            return
+
+        output_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Zielordner auswählen"
+        )
+
+        if not output_dir:
+            return
+
+        saved_count = 0
+        failed_files = []
+
+        # Excel Workbook erzeugen
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Segmentierung"
+
+        # Header
+        headers = ["Bild"]
+        for class_info in self.project.classes:
+            headers.append(f"{class_info.name} %")
+
+        sheet.append(headers)
+
+        for image_path in image_paths:
+            try:
+                image_array = ImageLoader.load_numpy_gray(image_path)
+                feature_stack, _ = FeatureExtractor.extract_features(image_array)
+
+                prediction_mask = TrainingEngine.predict_full_image(
+                    feature_stack,
+                    self.classifier
+                )
+
+                result_image = self.create_color_segmentation_image(prediction_mask)
+
+                filename = os.path.basename(image_path)
+                name, _ = os.path.splitext(filename)
+                save_path = os.path.join(output_dir, f"{name}_segmentiert.png")
+
+                result_image.save(save_path)
+                saved_count += 1
+
+                # Prozentwerte berechnen
+                total_pixels = prediction_mask.size
+
+                row = [filename]
+
+                for class_index, class_info in enumerate(self.project.classes):
+                    class_pixels = np.count_nonzero(prediction_mask == class_index)
+                    percent = (class_pixels / total_pixels) * 100
+                    row.append(round(percent, 2))
+
+                sheet.append(row)
+
+            except Exception as e:
+                failed_files.append(f"{os.path.basename(image_path)}: {e}")
+
+        # Excel speichern
+        excel_path = os.path.join(output_dir, "segmentierung_auswertung.xlsx")
+        workbook.save(excel_path)
+
+        if failed_files:
+            QMessageBox.warning(
+                self,
+                "Batch abgeschlossen mit Fehlern",
+                f"Gespeichert: {saved_count} Bild(er).\\n\\nExcel: {excel_path}\\n\\nFehler:\\n" + "\\n".join(failed_files)
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Batch fertig",
+                f"Alle {saved_count} Bild(er) wurden segmentiert.\\n\\nExcel gespeichert:\\n{excel_path}"
+            )
 
     # =====================================================
     # OVERLAY
