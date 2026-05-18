@@ -38,6 +38,14 @@ class GraphicsView(QGraphicsView):
                 return
 
             scene_pos = self.mapToScene(event.position().toPoint())
+
+            # Crop-Modus: jeder Klick setzt einen Punkt
+            if self.main_window.crop_mode:
+                self.main_window.add_crop_point(scene_pos)
+                self.scene().update()
+                return
+
+            # Normaler Modus: gedrückt halten und Klasse markieren
             self.current_path = [scene_pos]
             self.scene().update()
             return
@@ -67,6 +75,11 @@ class GraphicsView(QGraphicsView):
             )
             return
 
+        # Im Crop-Modus wird nicht frei gemalt
+        if self.main_window.crop_mode:
+            self.scene().update()
+            return
+
         if self.current_path:
             self.current_path.append(scene_pos)
             self.scene().update()
@@ -83,7 +96,9 @@ class GraphicsView(QGraphicsView):
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton and self.current_path:
-            self.main_window.add_stroke_to_current_class(self.current_path)
+            if not self.main_window.crop_mode:
+                self.main_window.add_stroke_to_current_class(self.current_path)
+
             self.current_path = []
             self.scene().update()
             return
@@ -116,6 +131,7 @@ class GraphicsView(QGraphicsView):
         project = self.main_window.project
         hovered = self.main_window.hovered_stroke
 
+        # Normale Klassen-Markierungen zeichnen
         for class_index, class_info in enumerate(project.classes):
             normal_color = QColor(class_info.color)
 
@@ -146,6 +162,7 @@ class GraphicsView(QGraphicsView):
                     p2 = QPointF(points[i + 1][0], points[i + 1][1])
                     painter.drawLine(p1, p2)
 
+        # Aktuelle freie Klassen-Markierung zeichnen
         if len(self.current_path) > 1:
             active_color = QColor(
                 project.classes[self.main_window.current_class_index].color
@@ -160,3 +177,36 @@ class GraphicsView(QGraphicsView):
 
             for i in range(len(self.current_path) - 1):
                 painter.drawLine(self.current_path[i], self.current_path[i + 1])
+
+        # Crop-Punkte zeichnen
+        crop_points = self.main_window.crop_points
+
+        if len(crop_points) > 0:
+            painter.setPen(QPen(
+                QColor("#00ffff"),
+                4,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin
+            ))
+
+            for i in range(len(crop_points) - 1):
+                p1 = QPointF(crop_points[i][0], crop_points[i][1])
+                p2 = QPointF(crop_points[i + 1][0], crop_points[i + 1][1])
+                painter.drawLine(p1, p2)
+
+            # Punkte sichtbar machen
+            painter.setPen(QPen(QColor("#ff0000"), 2))
+            for x, y in crop_points:
+                painter.drawEllipse(QPointF(x, y), 5, 5)
+
+            # Wenn geschlossen, letzte Linie zum ersten Punkt anzeigen
+            if len(crop_points) >= 3 and self.main_window.crop_points_are_closed():
+                painter.setPen(QPen(
+                    QColor("#00ff00"),
+                    3,
+                    Qt.PenStyle.DashLine
+                ))
+                p_last = QPointF(crop_points[-1][0], crop_points[-1][1])
+                p_first = QPointF(crop_points[0][0], crop_points[0][1])
+                painter.drawLine(p_last, p_first)

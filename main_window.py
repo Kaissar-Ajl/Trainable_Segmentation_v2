@@ -47,6 +47,9 @@ class MainWindow(QMainWindow):
         self.overlay_item = None
         self.overlay_visible = True
         self.overlay_opacity = 0.5
+        self.crop_background_color = "#000000"
+        self.crop_mode = False
+        self.crop_points = []
 
         # Dynamische Klassifikator-Einstellungen
         self.rf_n_estimators = 500
@@ -102,6 +105,13 @@ class MainWindow(QMainWindow):
         batch_button = QPushButton("Mehrere Bilder segmentieren")
         batch_button.clicked.connect(self.batch_segment_images)
 
+        self.crop_mode_button = QPushButton("Crop-Modus AUS")
+        self.crop_mode_button.setCheckable(True)
+        self.crop_mode_button.clicked.connect(self.toggle_crop_mode)
+
+        crop_button = QPushButton("Croppen")
+        crop_button.clicked.connect(self.crop_image_from_crop_points)
+
         toggle_overlay_button = QPushButton("Overlay AN/AUS")
         toggle_overlay_button.clicked.connect(self.toggle_overlay)
 
@@ -121,6 +131,8 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(train_button)
         top_layout.addWidget(predict_button)
         top_layout.addWidget(batch_button)
+        top_layout.addWidget(self.crop_mode_button)
+        top_layout.addWidget(crop_button)
         top_layout.addWidget(toggle_overlay_button)
         top_layout.addWidget(opacity_button)
         top_layout.addStretch()
@@ -168,6 +180,17 @@ class MainWindow(QMainWindow):
 
         action_batch_segment = file_menu.addAction("Mehrere Bilder segmentieren")
         action_batch_segment.triggered.connect(self.batch_segment_images)
+
+        file_menu.addSeparator()
+
+        action_choose_crop_bg = file_menu.addAction("Crop-Hintergrundfarbe wählen")
+        action_choose_crop_bg.triggered.connect(self.choose_crop_background_color)
+
+        action_toggle_crop_mode = file_menu.addAction("Crop-Modus AN/AUS")
+        action_toggle_crop_mode.triggered.connect(self.toggle_crop_mode)
+
+        action_crop_image = file_menu.addAction("Bild mit Crop-Umrandung croppen")
+        action_crop_image.triggered.connect(self.crop_image_from_crop_points)
 
         file_menu.addSeparator()
 
@@ -303,6 +326,140 @@ class MainWindow(QMainWindow):
             for feature_name, enabled in self.feature_options.items()
             if enabled
         ]
+
+    # =====================================================
+    # CROP / ROI
+    # =====================================================
+    def toggle_crop_mode(self):
+        self.crop_mode = not self.crop_mode
+        self.crop_points = []
+
+        if hasattr(self, "crop_mode_button"):
+            self.crop_mode_button.setChecked(self.crop_mode)
+            self.crop_mode_button.setText("Crop-Modus AN" if self.crop_mode else "Crop-Modus AUS")
+
+        self.view.current_path = []
+        self.view.viewport().update()
+
+    def choose_crop_background_color(self):
+        current_color = QColor(self.crop_background_color)
+        color = QColorDialog.getColor(current_color, self, "Crop-Hintergrundfarbe wählen")
+
+        if color.isValid():
+            self.crop_background_color = color.name()
+            QMessageBox.information(
+                self,
+                "Hintergrundfarbe",
+                f"Crop-Hintergrundfarbe gesetzt auf: {self.crop_background_color}"
+            )
+
+    def add_crop_point(self, scene_pos):
+        self.crop_points.append((float(scene_pos.x()), float(scene_pos.y())))
+        self.view.viewport().update()
+
+    def set_crop_points(self, path_points):
+        self.crop_points = [(float(p.x()), float(p.y())) for p in path_points]
+        self.view.viewport().update()
+
+    def clear_crop_points(self):
+        self.crop_points = []
+        self.view.viewport().update()
+
+    def crop_points_are_closed(self):
+        if len(self.crop_points) < 3:
+            return False
+
+        x1, y1 = self.crop_points[0]
+        x2, y2 = self.crop_points[-1]
+        dist = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+
+        return dist <= max(12, self.brush_size * 3)
+
+    def crop_image_from_crop_points(self):
+        if self.image_array is None or not self.project.image_path:
+            QMessageBox.warning(self, "Fehler", "Bitte zuerst ein Bild laden.")
+            return
+
+        if len(self.crop_points) < 3:
+            QMessageBox.warning(
+                self,
+                "Fehler",
+                "Bitte zuerst im Crop-Modus eine geschlossene Umrandung zeichnen."
+            )
+            return
+
+        if not self.crop_points_are_closed():
+            QMessageBox.warning(
+                self,
+                "Fehler",
+                "Die Crop-Umrandung ist nicht geschlossen.\n"
+                "Der letzte Punkt muss in der Nähe des ersten Punktes enden."
+                
+            )
+            return
+
+        try:
+            with Image.open(self.project.image_path) as img:
+                original = img.convert("RGB")
+
+            w, h = original.size
+
+            pts = [(int(round(x)), int(round(y))) for x, y in self.crop_points]
+            pts = [
+                (max(0, min(w - 1, x)), max(0, min(h - 1, y)))
+                for x, y in pts
+            ]
+
+            roi_mask_img = Image.new("L", (w, h), 0)
+            draw = ImageDraw.Draw(roi_mask_img)
+            draw.polygon(pts, fill=255)
+            roi_mask = np.array(roi_mask_img) > 0
+
+            if not np.any(roi_mask):
+                QMessageBox.warning(self, "Fehler", "Die Crop-Maske ist leer.")
+                return
+
+            color = QColor(self.crop_background_color)
+            bg_rgb = np.array([color.red(), color.green(), color.blue()], dtype=np.uint8)
+
+            result = np.array(original, dtype=np.uint8)
+            result[~roi_mask] = bg_rgb
+
+            ys, xs = np.where(roi_mask)
+            x_min, x_max = int(xs.min()), int(xs.max())
+            y_min, y_max = int(ys.min()), int(ys.max())
+
+            cropped = result[y_min:y_max + 1, x_min:x_max + 1]
+            cropped_image = Image.fromarray(cropped, mode="RGB")
+
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Gecropptes Bild speichern",
+                "cropped.png",
+                "PNG Files (*.png);;TIFF Files (*.tif *.tiff);;JPEG Files (*.jpg *.jpeg)"
+            )
+
+            if save_path:
+                cropped_image.save(save_path)
+                self.project.image_path = save_path
+            else:
+                self.project.image_path = ""
+
+            self.image_array = np.array(cropped_image.convert("L"), dtype=np.uint8)
+
+            self.clear_all_strokes()
+            self.clear_crop_points()
+            self.reset_ml_state()
+            self.refresh_table()
+            self.display_pixmap(ImageLoader.pil_to_qpixmap(cropped_image))
+
+            if self.crop_mode:
+                self.toggle_crop_mode()
+
+            QMessageBox.information(self, "Cropping", "Bild wurde erfolgreich gecroppt.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", str(e))
 
     # =====================================================
     # KLASSEN
